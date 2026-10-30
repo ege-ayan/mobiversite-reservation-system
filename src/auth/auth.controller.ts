@@ -1,4 +1,11 @@
-import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  HttpCode,
+  HttpStatus,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import {
   ApiBadRequestResponse,
   ApiConflictResponse,
@@ -6,10 +13,12 @@ import {
   ApiOkResponse,
   ApiOperation,
   ApiTags,
+  ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { AuthService } from './auth.service.js';
 import { Public } from './decorators/public.decorator.js';
+import { AuthThrottlerGuard } from './guards/auth-throttler.guard.js';
 import {
   HttpErrorResponse,
   ValidationErrorResponse,
@@ -19,7 +28,18 @@ import { LoginRequest } from './dto/login-request.js';
 import { RegisterRequest } from './dto/register-request.js';
 import { UserResponse } from './dto/user-response.js';
 
+const tooManyRequests = {
+  description: 'Too many attempts from this client',
+  type: HttpErrorResponse,
+  example: {
+    message: 'Too many requests',
+    error: 'Too Many Requests',
+    statusCode: 429,
+  },
+};
+
 @Public()
+@UseGuards(AuthThrottlerGuard)
 @ApiTags('Auth')
 @Controller('auth')
 export class AuthController {
@@ -45,6 +65,7 @@ export class AuthController {
     description: 'Validation failed',
     type: ValidationErrorResponse,
   })
+  @ApiTooManyRequestsResponse(tooManyRequests)
   login(@Body() body: LoginRequest): Promise<LoginResponse> {
     return this.authService.login(body);
   }
@@ -68,6 +89,7 @@ export class AuthController {
     description: 'Validation failed',
     type: ValidationErrorResponse,
   })
+  @ApiTooManyRequestsResponse(tooManyRequests)
   register(@Body() body: RegisterRequest): Promise<UserResponse> {
     return this.authService.register(body);
   }

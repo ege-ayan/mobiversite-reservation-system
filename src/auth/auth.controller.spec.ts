@@ -4,6 +4,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { ThrottlerModule } from '@nestjs/throttler';
 import request from 'supertest';
 import type { App } from 'supertest/types.js';
 import { AuthController } from './auth.controller.js';
@@ -29,14 +30,7 @@ describe('AuthController', () => {
   beforeEach(async () => {
     authService.login.mockReset();
     authService.register.mockReset();
-
-    const moduleRef = await Test.createTestingModule({
-      controllers: [AuthController],
-      providers: [{ provide: AuthService, useValue: authService }],
-    }).compile();
-
-    app = moduleRef.createNestApplication();
-    await app.init();
+    app = await createApp(100, authService);
   });
 
   afterEach(async () => {
@@ -119,3 +113,89 @@ describe('AuthController', () => {
     });
   });
 });
+
+describe('AuthController rate limit', () => {
+  let app: INestApplication<App>;
+  const authService = {
+    login: vi.fn(),
+    register: vi.fn(),
+  };
+
+  beforeEach(async () => {
+    authService.login.mockResolvedValue({ accessToken: 'signed-token' });
+    authService.register.mockResolvedValue({ id: 'user-id' });
+    app = await createApp(2, authService);
+  });
+
+  afterEach(async () => {
+    await app.close();
+  });
+
+  it('returns 429 after the login limit', async () => {
+    const body = { email: 'ada@example.com', password };
+
+    await request(app.getHttpServer())
+      .post('/auth/login')
+      .send(body)
+      .expect(200);
+    await request(app.getHttpServer())
+      .post('/auth/login')
+      .send(body)
+      .expect(200);
+
+    const response = await request(app.getHttpServer())
+      .post('/auth/login')
+      .send(body)
+      .expect(429);
+
+    expect(response.body).toEqual({
+      message: 'Too many requests',
+      error: 'Too Many Requests',
+      statusCode: 429,
+    });
+    expect(authService.login).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns 429 after the register limit', async () => {
+    const body = { email: 'ada@example.com', password };
+
+    await request(app.getHttpServer())
+      .post('/auth/register')
+      .send(body)
+      .expect(201);
+    await request(app.getHttpServer())
+      .post('/auth/register')
+      .send(body)
+      .expect(201);
+
+    const response = await request(app.getHttpServer())
+      .post('/auth/register')
+      .send(body)
+      .expect(429);
+
+    expect(response.body.message).toBe('Too many requests');
+    expect(authService.register).toHaveBeenCalledTimes(2);
+  });
+});
+
+async function createApp(
+  limit: number,
+  authService: {
+    login: ReturnType<typeof vi.fn>;
+    register: ReturnType<typeof vi.fn>;
+  },
+) {
+  const moduleRef = await Test.createTestingModule({
+    imports: [
+      ThrottlerModule.forRoot({
+        throttlers: [{ ttl: 60_000, limit }],
+      }),
+    ],
+    controllers: [AuthController],
+    providers: [{ provide: AuthService, useValue: authService }],
+  }).compile();
+
+  const app = moduleRef.createNestApplication();
+  await app.init();
+  return app;
+}

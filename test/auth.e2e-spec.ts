@@ -236,6 +236,18 @@ describe('Auth (e2e)', () => {
       error: 'Unauthorized',
       statusCode: 401,
     });
+    expect(login.responses['429'].content['application/json'].example).toEqual({
+      message: 'Too many requests',
+      error: 'Too Many Requests',
+      statusCode: 429,
+    });
+    expect(
+      register.responses['429'].content['application/json'].example,
+    ).toEqual({
+      message: 'Too many requests',
+      error: 'Too Many Requests',
+      statusCode: 429,
+    });
     expect(register.responses['201'].description).toBe(
       'Created customer account',
     );

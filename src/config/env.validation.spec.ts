@@ -18,6 +18,8 @@ describe('environmentSchema', () => {
     expect(parsed.PORT).toBe(3000);
     expect(parsed.JWT_EXPIRES_IN_SECONDS).toBe(86_400);
     expect(parsed.RESERVATION_HOLD_MS).toBe(1_800_000);
+    expect(parsed.AUTH_RATE_LIMIT).toBe(10);
+    expect(parsed.AUTH_RATE_TTL_MS).toBe(60_000);
   });
 
   it('rejects a missing required variable', () => {

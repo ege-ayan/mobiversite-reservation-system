@@ -7,5 +7,8 @@ export default defineConfig({
     root: './',
     include: ['**/*.e2e-spec.ts'],
     fileParallelism: false,
+    env: {
+      AUTH_RATE_LIMIT: '1000',
+    },
   },
 });

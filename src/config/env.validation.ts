@@ -10,6 +10,8 @@ export const environmentSchema = z.object({
   JWT_EXPIRES_IN_SECONDS: z.coerce.number().int().positive().default(86_400),
   PAYMENT_SERVICE_URL: z.url(),
   RESERVATION_HOLD_MS: z.coerce.number().int().positive().default(1_800_000),
+  AUTH_RATE_LIMIT: z.coerce.number().int().positive().default(10),
+  AUTH_RATE_TTL_MS: z.coerce.number().int().positive().default(60_000),
 });
 
 export type EnvironmentVariables = z.infer<typeof environmentSchema>;

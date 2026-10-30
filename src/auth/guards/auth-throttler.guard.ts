@@ -1,0 +1,24 @@
+import {
+  type ExecutionContext,
+  HttpException,
+  HttpStatus,
+  Injectable,
+} from '@nestjs/common';
+import { ThrottlerGuard, type ThrottlerLimitDetail } from '@nestjs/throttler';
+
+@Injectable()
+export class AuthThrottlerGuard extends ThrottlerGuard {
+  protected throwThrottlingException(
+    _context: ExecutionContext,
+    _detail: ThrottlerLimitDetail,
+  ): Promise<void> {
+    throw new HttpException(
+      {
+        message: 'Too many requests',
+        error: 'Too Many Requests',
+        statusCode: HttpStatus.TOO_MANY_REQUESTS,
+      },
+      HttpStatus.TOO_MANY_REQUESTS,
+    );
+  }
+}
