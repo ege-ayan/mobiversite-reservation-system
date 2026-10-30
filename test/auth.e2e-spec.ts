@@ -4,7 +4,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
 import { App } from 'supertest/types.js';
 import { AppModule } from '../src/app.module.js';
-import { configureApp } from '../src/configure-app.js';
+import { configureApp } from '../src/config/app.config.js';
 import { PrismaService } from '../src/prisma/prisma.service.js';
 
 describe('Auth (e2e)', () => {
@@ -214,6 +214,8 @@ describe('Auth (e2e)', () => {
     expect(response.body.servers).toEqual([{ url: 'http://localhost:3000' }]);
     expect(response.body.tags).toEqual([
       { name: 'Auth', description: 'Customer registration and login' },
+      { name: 'Bookings', description: 'Ticket reservations' },
+      { name: 'Events', description: 'Event catalog and administration' },
     ]);
     expect(login.tags).toEqual(['Auth']);
     expect(register.tags).toEqual(['Auth']);

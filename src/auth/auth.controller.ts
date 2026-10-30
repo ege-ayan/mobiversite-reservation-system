@@ -9,15 +9,17 @@ import {
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { AuthService } from './auth.service.js';
+import { Public } from './decorators/public.decorator.js';
 import {
   HttpErrorResponse,
   ValidationErrorResponse,
-} from './dto/error-response.js';
+} from '../common/dto/error-response.js';
 import { LoginResponse } from './dto/login-response.js';
 import { LoginRequest } from './dto/login-request.js';
 import { RegisterRequest } from './dto/register-request.js';
 import { UserResponse } from './dto/user-response.js';
 
+@Public()
 @ApiTags('Auth')
 @Controller('auth')
 export class AuthController {

@@ -13,14 +13,9 @@ import type { LoginRequest } from './dto/login-request.js';
 import type { LoginResponse } from './dto/login-response.js';
 import type { RegisterRequest } from './dto/register-request.js';
 import type { UserResponse } from './dto/user-response.js';
+import type { AccessTokenPayload } from './types/access-token-payload.js';
 
 const BCRYPT_ROUNDS = 12;
-
-export interface AccessTokenPayload {
-  sub: string;
-  email: string;
-  role: Role;
-}
 
 type UserRecord = {
   id: string;

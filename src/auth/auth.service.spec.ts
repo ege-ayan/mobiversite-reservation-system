@@ -100,6 +100,15 @@ describe('AuthService', () => {
         service.register({ email: 'ada@example.com', password }),
       ).rejects.toBeInstanceOf(ConflictException);
     });
+
+    it('rethrows a database error that is not a duplicate email', async () => {
+      users.findUnique.mockResolvedValue(null);
+      users.create.mockRejectedValue(new Error('database down'));
+
+      await expect(
+        service.register({ email: 'ada@example.com', password }),
+      ).rejects.toThrow('database down');
+    });
   });
 
   describe('login', () => {
