@@ -28,6 +28,14 @@ describe('Auth (e2e)', () => {
     await app.close();
   });
 
+  it('reports health without a token', async () => {
+    const response = await request(app.getHttpServer())
+      .get('/health')
+      .expect(200);
+
+    expect(response.body).toEqual({ status: 'ok' });
+  });
+
   it('registers a customer and hides the password hash', async () => {
     const email = uniqueEmail();
 
@@ -216,6 +224,7 @@ describe('Auth (e2e)', () => {
       { name: 'Auth', description: 'Customer registration and login' },
       { name: 'Bookings', description: 'Ticket reservations' },
       { name: 'Events', description: 'Event catalog and administration' },
+      { name: 'Health', description: 'Service health' },
     ]);
     expect(login.tags).toEqual(['Auth']);
     expect(register.tags).toEqual(['Auth']);
