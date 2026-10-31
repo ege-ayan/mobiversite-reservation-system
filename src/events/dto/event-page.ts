@@ -1,4 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
+
 import { EventResponse } from './event-response.js';
 
 export class EventPage {

@@ -1,5 +1,7 @@
 import { ConfigService } from '@nestjs/config';
-import type { EnvironmentVariables } from '../config/env.validation.js';
+
+import type { EnvironmentVariables } from '@/config/env.validation.js';
+
 import { PrismaService } from './prisma.service.js';
 
 describe('PrismaService', () => {

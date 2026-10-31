@@ -1,7 +1,9 @@
 import { ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { Role } from '../../generated/prisma/client.js';
-import { ROLES_KEY } from '../decorators/roles.decorator.js';
+
+import { ROLES_KEY } from '@/auth/decorators/roles.decorator.js';
+import { Role } from '@/generated/prisma/client.js';
+
 import { RolesGuard } from './roles.guard.js';
 
 describe('RolesGuard', () => {

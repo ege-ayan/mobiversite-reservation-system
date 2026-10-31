@@ -5,9 +5,10 @@ import {
   HealthCheckService,
   HealthIndicatorService,
 } from '@nestjs/terminus';
-import { Public } from '../auth/decorators/public.decorator.js';
-import { PrismaService } from '../prisma/prisma.service.js';
-import { RATE_LIMIT_STORAGE } from '../rate-limit/rate-limit.storage.js';
+
+import { Public } from '@/auth/decorators/public.decorator.js';
+import { PrismaService } from '@/prisma/prisma.service.js';
+import { RATE_LIMIT_STORAGE } from '@/rate-limit/rate-limit.storage.js';
 
 @Public()
 @ApiTags('Health')

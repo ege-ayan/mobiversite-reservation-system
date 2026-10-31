@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
+
 import { AuthModule } from './auth/auth.module.js';
 import { BookingsModule } from './bookings/bookings.module.js';
 import { LockingModule } from './common/locking/locking.module.js';

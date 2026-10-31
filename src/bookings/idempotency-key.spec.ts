@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+
 import { parseIdempotencyKey, requestFingerprint } from './idempotency-key.js';
 
 describe('parseIdempotencyKey', () => {

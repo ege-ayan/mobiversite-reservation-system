@@ -1,13 +1,14 @@
 import {
-  type ArgumentsHost,
   Catch,
-  type ExceptionFilter,
   HttpException,
   Logger,
+  type ArgumentsHost,
+  type ExceptionFilter,
 } from '@nestjs/common';
-import { Prisma } from '../../generated/prisma/client.js';
-import { isDatabaseBusy } from '../../prisma/retry.js';
-import { ErrorCode } from '../errors/error-code.js';
+
+import { ErrorCode } from '@/common/errors/error-code.js';
+import { Prisma } from '@/generated/prisma/client.js';
+import { isDatabaseBusy } from '@/prisma/retry.js';
 
 type ErrorBody = {
   message: string | string[];

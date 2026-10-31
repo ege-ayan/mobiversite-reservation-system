@@ -1,11 +1,13 @@
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types.js';
-import { BookingsService } from '../src/bookings/bookings.service.js';
-import { SWEEP_LOCK_NAME } from '../src/common/locking/mysql-lock.js';
-import { EventCancellationService } from '../src/events/event-cancellation.service.js';
-import { Role } from '../src/generated/prisma/client.js';
-import { PrismaService } from '../src/prisma/prisma.service.js';
+
+import { BookingsService } from '@/bookings/bookings.service.js';
+import { SWEEP_LOCK_NAME } from '@/common/locking/mysql-lock.js';
+import { EventCancellationService } from '@/events/event-cancellation.service.js';
+import { Role } from '@/generated/prisma/client.js';
+import { PrismaService } from '@/prisma/prisma.service.js';
+
 import {
   bearer,
   bootReservationApp,

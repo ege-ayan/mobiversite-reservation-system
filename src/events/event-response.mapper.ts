@@ -1,4 +1,5 @@
-import type { Prisma } from '../generated/prisma/client.js';
+import type { Prisma } from '@/generated/prisma/client.js';
+
 import type { EventResponse } from './dto/event-response.js';
 
 export type EventResponseSource = {

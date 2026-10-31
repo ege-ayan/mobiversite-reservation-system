@@ -1,9 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { z } from 'zod';
-import { badRequest, unauthorized } from '../common/errors/app.exception.js';
-import type { EnvironmentVariables } from '../config/env.validation.js';
-import { ChargeService } from '../bookings/charge.service.js';
+
+import { ChargeService } from '@/bookings/charge.service.js';
+import { badRequest, unauthorized } from '@/common/errors/app.exception.js';
+import type { EnvironmentVariables } from '@/config/env.validation.js';
+
 import { verifyPaymentWebhook } from './payment-signature.js';
 
 const webhookBody = z.object({

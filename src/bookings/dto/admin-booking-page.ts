@@ -1,4 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
+
 import { AdminBookingResponse } from './admin-booking-response.js';
 
 export class AdminBookingPage {

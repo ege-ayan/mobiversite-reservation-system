@@ -1,6 +1,7 @@
 import { BadGatewayException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import type { EnvironmentVariables } from '../config/env.validation.js';
+
+import type { EnvironmentVariables } from '@/config/env.validation.js';
 
 export const MOCK_PAYMENT_DECISIONS = [
   'decline',

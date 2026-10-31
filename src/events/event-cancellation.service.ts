@@ -1,20 +1,22 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { recordBookingTransitions } from '../bookings/booking-history.js';
+
+import { recordBookingTransitions } from '@/bookings/booking-history.js';
 import {
   applyPaidRefund,
   returnTickets,
-} from '../bookings/booking-lifecycle.js';
-import { conflict, notFound } from '../common/errors/app.exception.js';
-import { ErrorCode } from '../common/errors/error-code.js';
+} from '@/bookings/booking-lifecycle.js';
+import { conflict, notFound } from '@/common/errors/app.exception.js';
+import { ErrorCode } from '@/common/errors/error-code.js';
 import {
   CANCELLATION_LOCK_NAME,
   SweepLock,
-} from '../common/locking/mysql-lock.js';
-import { BookingStatus, Prisma } from '../generated/prisma/client.js';
-import { InventoryService } from '../inventory/inventory.service.js';
-import { RefundService } from '../payment/refund.service.js';
-import { runWrite } from '../prisma/retry.js';
-import { PrismaService } from '../prisma/prisma.service.js';
+} from '@/common/locking/mysql-lock.js';
+import { BookingStatus, Prisma } from '@/generated/prisma/client.js';
+import { InventoryService } from '@/inventory/inventory.service.js';
+import { RefundService } from '@/payment/refund.service.js';
+import { PrismaService } from '@/prisma/prisma.service.js';
+import { runWrite } from '@/prisma/retry.js';
+
 import type { EventCancellationResponse } from './dto/event-cancellation-response.js';
 
 const CANCELLATION_BATCH = 50;

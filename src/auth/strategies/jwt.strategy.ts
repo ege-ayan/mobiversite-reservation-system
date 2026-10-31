@@ -2,11 +2,12 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
-import type { EnvironmentVariables } from '../../config/env.validation.js';
-import { PrismaService } from '../../prisma/prisma.service.js';
-import { JWT_ALGORITHM, JWT_AUDIENCE, JWT_ISSUER } from '../jwt-claims.js';
-import type { AccessTokenPayload } from '../types/access-token-payload.js';
-import type { AuthenticatedUser } from '../types/authenticated-user.js';
+
+import { JWT_ALGORITHM, JWT_AUDIENCE, JWT_ISSUER } from '@/auth/jwt-claims.js';
+import type { AccessTokenPayload } from '@/auth/types/access-token-payload.js';
+import type { AuthenticatedUser } from '@/auth/types/authenticated-user.js';
+import type { EnvironmentVariables } from '@/config/env.validation.js';
+import { PrismaService } from '@/prisma/prisma.service.js';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {

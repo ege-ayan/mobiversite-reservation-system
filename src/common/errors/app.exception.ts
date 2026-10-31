@@ -6,6 +6,7 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
+
 import type { ErrorCode } from './error-code.js';
 
 function body(

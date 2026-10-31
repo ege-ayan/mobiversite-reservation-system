@@ -1,23 +1,25 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
+
 import {
   badGateway,
   conflict,
   notFound,
-} from '../common/errors/app.exception.js';
-import { PAYMENT_LOCK_NAME, SweepLock } from '../common/locking/mysql-lock.js';
-import { BookingStatus, PaymentState } from '../generated/prisma/client.js';
-import { InventoryService } from '../inventory/inventory.service.js';
-import { PrismaService } from '../prisma/prisma.service.js';
-import { ErrorCode } from '../common/errors/error-code.js';
-import { runWrite } from '../prisma/retry.js';
+} from '@/common/errors/app.exception.js';
+import { ErrorCode } from '@/common/errors/error-code.js';
+import { PAYMENT_LOCK_NAME, SweepLock } from '@/common/locking/mysql-lock.js';
+import { BookingStatus, PaymentState } from '@/generated/prisma/client.js';
+import { InventoryService } from '@/inventory/inventory.service.js';
 import {
   PAYMENT_GATEWAY,
   type MockPaymentDecision,
   type PaymentGateway,
-} from '../payment/payment.client.js';
+} from '@/payment/payment.client.js';
+import { PrismaService } from '@/prisma/prisma.service.js';
+import { runWrite } from '@/prisma/retry.js';
+
 import { amountOf } from './booking-amount.js';
-import { applyPaidRefund } from './booking-lifecycle.js';
 import { recordBookingTransition } from './booking-history.js';
+import { applyPaidRefund } from './booking-lifecycle.js';
 import { BookingQueryService } from './booking-query.service.js';
 import {
   toBookingResponse,

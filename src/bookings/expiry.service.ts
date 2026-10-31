@@ -1,8 +1,9 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { Prisma } from '../generated/prisma/client.js';
-import { SweepLock, SWEEP_LOCK_NAME } from '../common/locking/mysql-lock.js';
-import { InventoryService } from '../inventory/inventory.service.js';
-import { PrismaService } from '../prisma/prisma.service.js';
+
+import { SWEEP_LOCK_NAME, SweepLock } from '@/common/locking/mysql-lock.js';
+import { Prisma } from '@/generated/prisma/client.js';
+import { InventoryService } from '@/inventory/inventory.service.js';
+import { PrismaService } from '@/prisma/prisma.service.js';
 
 const EXPIRY_EVENT_BATCH = 200;
 

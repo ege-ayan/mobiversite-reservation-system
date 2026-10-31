@@ -1,4 +1,4 @@
-import type { BookingStatus } from '../generated/prisma/client.js';
+import type { BookingStatus } from '@/generated/prisma/client.js';
 
 export type BookingTransition = {
   bookingId: string;

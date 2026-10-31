@@ -5,7 +5,9 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import helmet from 'helmet';
-import { AppExceptionFilter } from '../common/filters/prisma-exception.filter.js';
+
+import { AppExceptionFilter } from '@/common/filters/prisma-exception.filter.js';
+
 import type { EnvironmentVariables } from './env.validation.js';
 import { setupOpenApi } from './openapi.config.js';
 

@@ -1,8 +1,10 @@
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types.js';
-import { Role } from '../src/generated/prisma/client.js';
-import { PrismaService } from '../src/prisma/prisma.service.js';
+
+import { Role } from '@/generated/prisma/client.js';
+import { PrismaService } from '@/prisma/prisma.service.js';
+
 import {
   bearer,
   bootReservationApp,

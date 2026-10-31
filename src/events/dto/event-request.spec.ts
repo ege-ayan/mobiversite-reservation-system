@@ -1,5 +1,6 @@
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
+
 import { EventRequest, EventUpdateRequest } from './event-request.js';
 
 describe('EventRequest', () => {

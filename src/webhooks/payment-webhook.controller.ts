@@ -5,11 +5,13 @@ import {
   HttpStatus,
   Post,
   Req,
+  type RawBodyRequest,
 } from '@nestjs/common';
 import { ApiNoContentResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
-import type { RawBodyRequest } from '@nestjs/common';
 import type { Request } from 'express';
-import { Public } from '../auth/decorators/public.decorator.js';
+
+import { Public } from '@/auth/decorators/public.decorator.js';
+
 import { PaymentWebhookService } from './payment-webhook.service.js';
 
 @ApiTags('Webhooks')

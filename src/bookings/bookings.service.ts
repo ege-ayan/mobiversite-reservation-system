@@ -1,14 +1,16 @@
 import { Injectable } from '@nestjs/common';
-import type { PageQuery } from '../common/pagination/page-query.js';
-import type { MockPaymentDecision } from '../payment/payment.client.js';
+
+import type { PageQuery } from '@/common/pagination/page-query.js';
+import type { MockPaymentDecision } from '@/payment/payment.client.js';
+
 import { BookingQueryService } from './booking-query.service.js';
 import { ChargeService } from './charge.service.js';
-import { ExpiryService } from './expiry.service.js';
-import { ReservationService } from './reservation.service.js';
 import type { AdminBookingPage } from './dto/admin-booking-page.js';
 import type { BookingPage } from './dto/booking-page.js';
 import type { BookingRequest } from './dto/booking-request.js';
 import type { BookingResponse } from './dto/booking-response.js';
+import { ExpiryService } from './expiry.service.js';
+import { ReservationService } from './reservation.service.js';
 
 @Injectable()
 export class BookingsService {

@@ -1,5 +1,6 @@
-import { BookingStatus, Prisma } from '../generated/prisma/client.js';
-import { toEventResponse } from '../events/event-response.mapper.js';
+import { toEventResponse } from '@/events/event-response.mapper.js';
+import { BookingStatus, Prisma } from '@/generated/prisma/client.js';
+
 import { amountOf } from './booking-amount.js';
 import type { AdminBookingResponse } from './dto/admin-booking-response.js';
 import type { BookingResponse } from './dto/booking-response.js';

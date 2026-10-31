@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { badRequest } from '../common/errors/app.exception.js';
+
+import { badRequest } from '@/common/errors/app.exception.js';
 
 const KEY_PATTERN = /^[\w.:-]{1,255}$/;
 

@@ -1,8 +1,10 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaMariaDb } from '@prisma/adapter-mariadb';
-import type { EnvironmentVariables } from '../config/env.validation.js';
-import { PrismaClient } from '../generated/prisma/client.js';
+
+import type { EnvironmentVariables } from '@/config/env.validation.js';
+import { PrismaClient } from '@/generated/prisma/client.js';
+
 import { mysqlConnectionConfig } from './mysql-config.js';
 
 @Injectable()

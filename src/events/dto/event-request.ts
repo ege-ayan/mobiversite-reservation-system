@@ -10,6 +10,7 @@ import {
   MinLength,
   Validate,
 } from 'class-validator';
+
 import { FutureDateConstraint } from './future-date.js';
 
 class EventFields {

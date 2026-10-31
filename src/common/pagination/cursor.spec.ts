@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+
 import { decodeCursor, encodeCursor, slicePage } from './cursor.js';
 
 const id = '01932a5e-8c3a-7c2e-9b1a-6d4f2e8c0a11';

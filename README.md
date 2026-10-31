@@ -16,7 +16,7 @@ The fastest way to run the whole system is Docker. The sections below also cover
 | Readiness            | http://localhost:3000/health/ready |
 | Mock payment service | http://localhost:4000/payments     |
 
-A one-shot `migrate` container applies database migrations and seeds an administrator plus one sample event. The API starts after that job finishes. HTTP routes live under `/api/v1`. Health and `/docs` stay at the root.
+On startup the API container applies database migrations and seeds an administrator plus one sample event, then listens. HTTP routes live under `/api/v1`. Health and `/docs` stay at the root.
 
 | Account  | Value                     |
 | -------- | ------------------------- |
@@ -39,7 +39,7 @@ The seeded event is **Mobiversite Live**, 1 June 2027, 100 tickets at `25.00`.
 | Data access     | Prisma 7 with the MariaDB driver adapter                  | Schema, migrations, and a typed client. Prisma does not model MySQL `CHECK` constraints, so those live in migration SQL. |
 | Auth            | Passport JWT, `bcryptjs` (12 rounds)                      | Stateless API. The password hash is never returned.                                                                      |
 | Validation      | `class-validator` on inputs, Zod on environment variables | Bad bodies become 400 before they reach a service. The process refuses to boot when required configuration is missing.   |
-| API docs        | OpenAPI via `@nestjs/swagger` at `/docs`                  | Every route, status, and example is generated from the controllers.                                                      |
+| API docs        | OpenAPI via `@nestjs/swagger` at `/docs`                  | Every route, status, and example is generated from the controllers. Authorize accepts a pasted bearer token or the account email and password. |
 | Jobs            | `@nestjs/schedule`                                        | Three independent minute jobs: expired holds, unfinished payments, and event cancellations.                              |
 | Rate limit      | `@nestjs/throttler`, memory or Redis                      | `RATE_LIMIT_STORE` selects the counter. Redis shares login and register limits across API instances.                     |
 | Tests           | Vitest and Supertest                                      | Unit tests mock the database. End-to-end tests run against MySQL.                                                        |
@@ -79,7 +79,7 @@ From the repository root:
 docker compose up --build
 ```
 
-The first build installs dependencies and compiles TypeScript. Later starts reuse the image until the source changes. Compose waits until MySQL is healthy, then a `migrate` job applies migrations and seeds the admin and the sample event. The API starts after that job, Redis, and the payment mock are ready, and listens on port 3000.
+The first build installs dependencies and compiles TypeScript. Later starts reuse the image until the source changes. Compose waits until MySQL is healthy. The API container then applies migrations, seeds the admin and the sample event, and listens on port 3000 once Redis and the payment mock are ready. `NODE_ENV` inside Compose is `development`, so the example `JWT_SECRET` is accepted and the mock payment header works.
 
 The API container sets `RATE_LIMIT_STORE=redis`, so every replica shares one login counter. A process started with `npm run start:dev` keeps the in-process counter unless `.env` points it at Redis.
 
@@ -154,13 +154,12 @@ If port 3000, 3306, or 4000 is already taken, stop the other process or change t
 
 ### What the containers do
 
-| Service   | Image                                              | Role                                                                                               |
-| --------- | -------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `migrate` | Same image as `api`                                | Runs once: `prisma migrate deploy`, then `prisma/seed.mjs`. The API waits until this job succeeds. |
-| `api`     | Built from the `Dockerfile`                        | NestJS process. The image entrypoint is `node dist/main.js`.                                       |
+| Service   | Image                                              | Role                                                                                                                                                          |
+| --------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api`     | Built from the `Dockerfile`                        | Applies migrations, runs `prisma/seed.mjs`, then the NestJS process. The image entrypoint is `node dist/main.js`; Compose wraps that with migrate and seed. |
 | `mysql`   | `mysql:8.4`                                        | Database `mobiversite`, user `mobiversite`, password `mobiversite`, root password `root`.          |
 | `payment` | `node:26-alpine` running `mock-payment/server.mjs` | Always-on stand-in for the payment provider.                                                       |
-| `redis`   | `redis:7-alpine`                                   | Shared login and booking rate-limit counters when `RATE_LIMIT_STORE=redis`.                        |
+| `redis`   | `redis:7-alpine`                                   | Shared login and booking rate-limit counters when `RATE_LIMIT_STORE=redis`. Reachable only as `redis` on the Compose network, so a Redis already listening on the host does not block startup. |
 
 The API image is built in two stages. The first installs every dependency, generates the Prisma client, and compiles to `dist`. The second installs production dependencies only, copies `dist` and `prisma`, and runs as the `node` user.
 
@@ -200,7 +199,7 @@ copy .env.example .env
 
 `.env.example` points `DATABASE_URL` at `localhost:3306` and `PAYMENT_SERVICE_URL` at `http://localhost:4000`. A URL that already ends in `/payments` is accepted too. Those match the published Compose ports. The file is read by Nest, by Prisma, and by `npm run db:seed`. `.env` is gitignored.
 
-`JWT_SECRET` in the example is `change-me`. That is accepted when `NODE_ENV` is `development` or `test`. Compose sets `NODE_ENV=production` inside the API container, and a production secret shorter than 32 characters prevents the process from starting. The Compose default secret already meets that length. Replace it for any real deployment.
+Leave `JWT_SECRET` unset for local development. The API and Compose then use `1234567891011121314151617181920212223242526272829303132`, the numbers 1 through 32 written in order. Compose sets `NODE_ENV=development`. A production process requires its own secret of at least 32 characters and does not accept that default. The image itself defaults to `NODE_ENV=production` when it is run outside this Compose file.
 
 ### 3. Install, migrate, seed, and start
 
@@ -225,7 +224,7 @@ On Windows the same four npm commands work in PowerShell and Command Prompt. `np
 | `NODE_ENV`                         | no       | `development`             | `development`, `test`, or `production`. Production rejects a short `JWT_SECRET`.                                                                                                                           |
 | `PORT`                             | no       | `3000`                    | HTTP port.                                                                                                                                                                                                 |
 | `DATABASE_URL`                     | yes      |                           | MySQL URL, for example `mysql://mobiversite:mobiversite@localhost:3306/mobiversite`.                                                                                                                       |
-| `JWT_SECRET`                       | yes      |                           | HMAC secret for access tokens.                                                                                                                                                                             |
+| `JWT_SECRET`                       | production | numbers 1 through 32      | HMAC secret for access tokens. Development and test use `1234567891011121314151617181920212223242526272829303132` when this is unset. Production requires at least 32 characters. |
 | `JWT_EXPIRES_IN_SECONDS`           | no       | `86400`                   | Access token lifetime. One day. Logout does not revoke it.                                                                                                                                                 |
 | `REFRESH_TOKEN_EXPIRES_IN_SECONDS` | no       | `604800`                  | Refresh token lifetime. Seven days. Stored as a SHA-256 hash.                                                                                                                                              |
 | `PAYMENT_SERVICE_URL`              | yes      |                           | Origin of the payment service, for example `http://localhost:4000`. A URL that already ends in `/payments` is accepted. Charges go to `/payments`, refunds to `/refunds`, and lookups to `/payments/:key`. |
@@ -384,7 +383,7 @@ Passwords are hashed with bcrypt at 12 rounds. The dummy hash used for unknown e
 - **Decimal money as strings.** Prices travel as `"25.00"` so JSON numbers do not round currency.
 - **Helmet and CORS.** Security headers are on. Content Security Policy stays off while Swagger is enabled, so the UI can load, and it is on when Swagger is off. CORS allows browser clients during review.
 - **Errors.** Domain failures include a `code`, for example `SOLD_OUT`. Validation failures use `VALIDATION_ERROR` and rate limits use `RATE_LIMITED`. A unique-constraint failure becomes 409, a missing record 404, and a check-constraint or overflow failure 400. Other database failures become a generic 500 without the SQL text. An unexpected error is logged and returned as `INTERNAL_ERROR`.
-- **Request log.** `pino-http` writes method, path, status, and duration when the response finishes. `x-request-id` is echoed when it is a single token of letters, digits, `.`, `_`, or `-` up to 200 characters. Otherwise the API generates a UUID. Authorization and cookie headers are redacted. Logs are silent when `NODE_ENV` is `test`.
+- **Request log.** `pino-http` writes method, path, status, and duration when the response finishes. Successful `GET /health`, `/health/live`, and `/health/ready` probes are omitted, because Compose calls them every few seconds. A probe that returns 4xx or 5xx is still written. `x-request-id` is echoed when it is a single token of letters, digits, `.`, `_`, or `-` up to 200 characters. Otherwise the API generates a UUID. Authorization and cookie headers are redacted. Logs are silent when `NODE_ENV` is `test`.
 - **Health.** `GET /health` is public and checks the database plus the rate-limit store. `GET /health/live` only checks that the process is up. `GET /health/ready` checks the database and the rate-limit store. Compose can keep using `/health`.
 - **Booking history.** Each status change writes a `booking_events` row with `from_status`, `to_status`, and a reason such as `reserved`, `paid`, `cancelled`, `expired`, `refunded`, `event_cancelled`, or `event_refunded`. `EXPIRED` does not set `cancelled_at`.
 
@@ -414,7 +413,7 @@ npx prisma migrate dev
 
 ### SQL dump
 
-`database/mobiversite.sql` is a snapshot of the schema, the Prisma migration history, the seeded admin, and the sample event. The running app does not load this file. The Compose `migrate` service applies `prisma/migrations`. Import the dump when you want the schema without running the API. Importing it and then running migrations is safe: the `_prisma_migrations` rows match the files in the repository, so `migrate deploy` does nothing.
+`database/mobiversite.sql` is a snapshot of the schema, the Prisma migration history, the seeded admin, and the sample event. The running app does not load this file. The API container applies `prisma/migrations` before it listens. Import the dump when you want the schema without running the API. Importing it and then running migrations is safe: the `_prisma_migrations` rows match the files in the repository, so `migrate deploy` does nothing.
 
 Create the database first if it does not exist, then import.
 
@@ -524,10 +523,10 @@ The package is private until its visibility is changed under the repository's Pa
 | Symptom                                                | What to check                                                                                                                                                                                                                   |
 | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `docker compose up` fails on the build                 | Docker is running, and the first build has network access to the npm registry.                                                                                                                                                  |
-| API container restarts                                 | `docker compose logs api` and `docker compose logs migrate`. A production `JWT_SECRET` or `PAYMENT_WEBHOOK_SECRET` shorter than 32 characters is a usual cause. Migrations run in the `migrate` service before the API listens. |
+| API container restarts                                 | `docker compose logs api`. Migrations and the seed run in that same container before the process listens. A production `JWT_SECRET` or `PAYMENT_WEBHOOK_SECRET` shorter than 32 characters stops startup only when `NODE_ENV` is `production`. |
 | `ECONNREFUSED 127.0.0.1:3306` from `npm run start:dev` | MySQL is not published on the host. Start it with `docker compose up mysql`.                                                                                                                                                    |
 | `P1001` or migrate cannot connect                      | `DATABASE_URL` host is `localhost` on the host and `mysql` inside Compose. The example file and `compose.yml` already differ in that way.                                                                                       |
-| Port already allocated                                 | Another process owns 3000, 3306, 4000, or 6379.                                                                                                                                                                                 |
+| Port already allocated                                 | Another process owns 3000, 3306, or 4000. Redis is not published to the host.                                                                                                                                                   |
 | Login returns 500 and the log mentions Redis           | `RATE_LIMIT_STORE` is `redis` and `REDIS_URL` is wrong, or Redis is down. Compose sets both. A local process can stay on `memory`. Health then returns 503.                                                                     |
 | Register returns 429                                   | The auth limit is 10 requests per minute. Wait, or raise `AUTH_RATE_LIMIT`.                                                                                                                                                     |
 | Payment returns 502                                    | The mock is down, or `PAYMENT_SERVICE_URL` is wrong. From the host it must be `localhost`, not the Compose hostname `payment`.                                                                                                  |

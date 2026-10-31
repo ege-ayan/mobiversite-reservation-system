@@ -6,16 +6,18 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
-import { BookingStatus, Prisma } from '../generated/prisma/client.js';
-import { InventoryService } from '../inventory/inventory.service.js';
-import { SweepLock } from '../common/locking/mysql-lock.js';
-import { EventCancellationService } from '../events/event-cancellation.service.js';
-import { PAYMENT_GATEWAY } from '../payment/payment.client.js';
-import { ChargeService } from './charge.service.js';
-import { RefundService } from '../payment/refund.service.js';
-import { PrismaService } from '../prisma/prisma.service.js';
+
+import { SweepLock } from '@/common/locking/mysql-lock.js';
+import { EventCancellationService } from '@/events/event-cancellation.service.js';
+import { BookingStatus, Prisma } from '@/generated/prisma/client.js';
+import { InventoryService } from '@/inventory/inventory.service.js';
+import { PAYMENT_GATEWAY } from '@/payment/payment.client.js';
+import { RefundService } from '@/payment/refund.service.js';
+import { PrismaService } from '@/prisma/prisma.service.js';
+
 import { BookingQueryService } from './booking-query.service.js';
 import { BookingsService } from './bookings.service.js';
+import { ChargeService } from './charge.service.js';
 import { ExpiryService } from './expiry.service.js';
 import { requestFingerprint } from './idempotency-key.js';
 import { ReservationService } from './reservation.service.js';

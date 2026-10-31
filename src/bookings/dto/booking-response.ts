@@ -1,6 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { BookingStatus } from '../../generated/prisma/client.js';
-import { EventResponse } from '../../events/dto/event-response.js';
+
+import { EventResponse } from '@/events/dto/event-response.js';
+import { BookingStatus } from '@/generated/prisma/client.js';
 
 export class BookingResponse {
   @ApiProperty({ example: '01932a5e-8c3a-7c2e-9b1a-6d4f2e8c0a12' })

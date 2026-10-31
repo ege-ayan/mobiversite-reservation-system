@@ -1,12 +1,13 @@
 import {
   ConflictException,
-  type INestApplication,
   UnauthorizedException,
+  type INestApplication,
 } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { ThrottlerModule } from '@nestjs/throttler';
 import request from 'supertest';
 import type { App } from 'supertest/types.js';
+
 import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 

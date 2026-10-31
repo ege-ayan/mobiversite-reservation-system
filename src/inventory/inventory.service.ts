@@ -1,9 +1,10 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { recordBookingTransitions } from '../bookings/booking-history.js';
-import { returnTickets } from '../bookings/booking-lifecycle.js';
-import { BookingStatus, Prisma } from '../generated/prisma/client.js';
-import { runWrite } from '../prisma/retry.js';
-import { PrismaService } from '../prisma/prisma.service.js';
+
+import { recordBookingTransitions } from '@/bookings/booking-history.js';
+import { returnTickets } from '@/bookings/booking-lifecycle.js';
+import { BookingStatus, Prisma } from '@/generated/prisma/client.js';
+import { PrismaService } from '@/prisma/prisma.service.js';
+import { runWrite } from '@/prisma/retry.js';
 
 export type InventoryTransaction = Prisma.TransactionClient;
 

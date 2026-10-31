@@ -1,19 +1,21 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import type { EnvironmentVariables } from '../config/env.validation.js';
+
 import {
+  badRequest,
   conflict,
   notFound,
-  badRequest,
-} from '../common/errors/app.exception.js';
-import { ErrorCode } from '../common/errors/error-code.js';
-import { runWrite } from '../prisma/retry.js';
-import { BookingStatus, Prisma } from '../generated/prisma/client.js';
-import { InventoryService } from '../inventory/inventory.service.js';
-import { RefundService } from '../payment/refund.service.js';
-import { PrismaService } from '../prisma/prisma.service.js';
-import { applyPaidRefund, returnTickets } from './booking-lifecycle.js';
+} from '@/common/errors/app.exception.js';
+import { ErrorCode } from '@/common/errors/error-code.js';
+import type { EnvironmentVariables } from '@/config/env.validation.js';
+import { BookingStatus, Prisma } from '@/generated/prisma/client.js';
+import { InventoryService } from '@/inventory/inventory.service.js';
+import { RefundService } from '@/payment/refund.service.js';
+import { PrismaService } from '@/prisma/prisma.service.js';
+import { runWrite } from '@/prisma/retry.js';
+
 import { recordBookingTransition } from './booking-history.js';
+import { applyPaidRefund, returnTickets } from './booking-lifecycle.js';
 import { BookingQueryService } from './booking-query.service.js';
 import {
   toBookingResponse,

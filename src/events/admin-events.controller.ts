@@ -3,15 +3,18 @@ import {
   ApiBearerAuth,
   ApiForbiddenResponse,
   ApiNotFoundResponse,
+  ApiOAuth2,
   ApiOkResponse,
   ApiOperation,
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
-import { Roles } from '../auth/decorators/roles.decorator.js';
-import { HttpErrorResponse } from '../common/dto/error-response.js';
-import { ApiPageQueries } from '../common/pagination/page-query.js';
-import { Role } from '../generated/prisma/client.js';
+
+import { Roles } from '@/auth/decorators/roles.decorator.js';
+import { HttpErrorResponse } from '@/common/dto/error-response.js';
+import { ApiPageQueries } from '@/common/pagination/page-query.js';
+import { Role } from '@/generated/prisma/client.js';
+
 import { AdminEventPage } from './dto/admin-event-page.js';
 import { AdminEventQuery } from './dto/admin-event-query.js';
 import { AdminEventResponse } from './dto/admin-event-response.js';
@@ -19,6 +22,7 @@ import { EventsService } from './events.service.js';
 
 @ApiTags('Events')
 @ApiBearerAuth()
+@ApiOAuth2([])
 @ApiUnauthorizedResponse({ description: 'Missing or invalid access token' })
 @ApiForbiddenResponse({
   description: 'Insufficient role',

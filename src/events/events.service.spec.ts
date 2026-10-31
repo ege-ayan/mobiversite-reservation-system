@@ -4,10 +4,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { Prisma } from '../generated/prisma/client.js';
+
+import { Prisma } from '@/generated/prisma/client.js';
+import { InventoryService } from '@/inventory/inventory.service.js';
+import { PrismaService } from '@/prisma/prisma.service.js';
+
 import { EventCancellationService } from './event-cancellation.service.js';
-import { InventoryService } from '../inventory/inventory.service.js';
-import { PrismaService } from '../prisma/prisma.service.js';
 import { EventsService } from './events.service.js';
 
 const request = {

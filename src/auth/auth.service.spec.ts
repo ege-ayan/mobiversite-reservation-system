@@ -3,8 +3,10 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
 import bcrypt from 'bcryptjs';
-import { Prisma } from '../generated/prisma/client.js';
-import { PrismaService } from '../prisma/prisma.service.js';
+
+import { Prisma } from '@/generated/prisma/client.js';
+import { PrismaService } from '@/prisma/prisma.service.js';
+
 import { AuthService } from './auth.service.js';
 
 const password = 'correct horse battery';

@@ -1,9 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { BookingsService } from '../bookings/bookings.service.js';
-import type { EnvironmentVariables } from '../config/env.validation.js';
-import { EventCancellationService } from '../events/event-cancellation.service.js';
+
+import { BookingsService } from '@/bookings/bookings.service.js';
+import type { EnvironmentVariables } from '@/config/env.validation.js';
+import { EventCancellationService } from '@/events/event-cancellation.service.js';
 
 @Injectable()
 export class ReservationScheduler {

@@ -1,5 +1,10 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { CATALOG_STATUSES, type CatalogStatus } from '../catalog-status.js';
+
+import {
+  CATALOG_STATUSES,
+  type CatalogStatus,
+} from '@/events/catalog-status.js';
+
 import { EventResponse } from './event-response.js';
 
 export class AdminEventResponse extends EventResponse {

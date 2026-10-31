@@ -2,7 +2,8 @@ import {
   BookingStatus,
   PaymentState,
   Prisma,
-} from '../generated/prisma/client.js';
+} from '@/generated/prisma/client.js';
+
 import { recordBookingTransition } from './booking-history.js';
 
 type Tx = Prisma.TransactionClient;

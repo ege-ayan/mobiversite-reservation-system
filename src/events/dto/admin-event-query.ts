@@ -1,6 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsIn, IsOptional } from 'class-validator';
-import { PageQuery } from '../../common/pagination/page-query.js';
+
+import { PageQuery } from '@/common/pagination/page-query.js';
 
 export const ADMIN_EVENT_STATUSES = [
   'all',

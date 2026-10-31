@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { Role } from '../../generated/prisma/client.js';
+
+import { Role } from '@/generated/prisma/client.js';
 
 export class UserResponse {
   @ApiProperty({ example: '01932a5e-8c3a-7c2e-9b1a-6d4f2e8c0a11' })

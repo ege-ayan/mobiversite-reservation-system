@@ -1,8 +1,11 @@
-import { BadGatewayException } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { EnvironmentVariables } from '../config/env.validation.js';
+
+import { BadGatewayException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+
+import type { EnvironmentVariables } from '@/config/env.validation.js';
+
 import { PaymentClient } from './payment.client.js';
 
 describe('PaymentClient', () => {

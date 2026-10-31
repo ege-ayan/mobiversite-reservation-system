@@ -2,10 +2,12 @@ import { INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import request from 'supertest';
 import { App } from 'supertest/types.js';
-import type { EnvironmentVariables } from '../src/config/env.validation.js';
-import { Role } from '../src/generated/prisma/client.js';
-import { PrismaService } from '../src/prisma/prisma.service.js';
-import { signPaymentWebhook } from '../src/webhooks/payment-signature.js';
+
+import type { EnvironmentVariables } from '@/config/env.validation.js';
+import { Role } from '@/generated/prisma/client.js';
+import { PrismaService } from '@/prisma/prisma.service.js';
+import { signPaymentWebhook } from '@/webhooks/payment-signature.js';
+
 import {
   bearer,
   bootReservationApp,

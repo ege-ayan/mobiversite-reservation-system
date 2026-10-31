@@ -1,5 +1,7 @@
-import { RedisRateLimitStorage } from './redis-rate-limit.storage.js';
-import type { RateLimitRedis } from './redis-rate-limit.storage.js';
+import {
+  RedisRateLimitStorage,
+  type RateLimitRedis,
+} from './redis-rate-limit.storage.js';
 
 function fakeRedis(result: unknown) {
   const evalCommand = vi.fn().mockResolvedValue(result);

@@ -3,9 +3,10 @@ import { JwtService } from '@nestjs/jwt';
 import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
 import { App } from 'supertest/types.js';
-import { AppModule } from '../src/app.module.js';
-import { configureApp } from '../src/config/app.config.js';
-import { PrismaService } from '../src/prisma/prisma.service.js';
+
+import { AppModule } from '@/app.module.js';
+import { configureApp } from '@/config/app.config.js';
+import { PrismaService } from '@/prisma/prisma.service.js';
 
 describe('Auth (e2e)', () => {
   let app: INestApplication<App>;
@@ -349,6 +350,12 @@ describe('Auth (e2e)', () => {
     );
     expect(schemas.HttpErrorResponse.properties.statusCode).toBeDefined();
     expect(response.body.components.securitySchemes.bearer).toBeDefined();
+    expect(
+      response.body.components.securitySchemes.oauth2.flows.password.tokenUrl,
+    ).toBe('/api/v1/auth/token');
+    expect(response.body.paths['/api/v1/auth/me'].get.security).toEqual(
+      expect.arrayContaining([{ bearer: [] }, { oauth2: [] }]),
+    );
 
     await request(app.getHttpServer()).get('/docs').expect(200);
   });
@@ -430,6 +437,53 @@ describe('Auth (e2e)', () => {
       .expect(200);
     expect(me.body).toMatchObject({ email, role: 'CUSTOMER' });
     expect(me.body).not.toHaveProperty('passwordHash');
+  });
+
+  it('exchanges an email and password for a bearer token', async () => {
+    const email = uniqueEmail();
+    await request(app.getHttpServer())
+      .post('/api/v1/auth/register')
+      .send({ email, password })
+      .expect(201);
+
+    const token = await request(app.getHttpServer())
+      .post('/api/v1/auth/token')
+      .type('form')
+      .send({
+        grant_type: 'password',
+        username: ` ${email.toUpperCase()} `,
+        password,
+        scope: '',
+      })
+      .expect(200);
+
+    expect(token.body.token_type).toBe('Bearer');
+    expect(token.body.access_token).toEqual(expect.any(String));
+    expect(token.body.refresh_token).toEqual(expect.any(String));
+
+    const me = await request(app.getHttpServer())
+      .get('/api/v1/auth/me')
+      .set({ Authorization: `Bearer ${token.body.access_token}` })
+      .expect(200);
+    expect(me.body.email).toBe(email);
+
+    const rejected = await request(app.getHttpServer())
+      .post('/api/v1/auth/token')
+      .type('form')
+      .send({ grant_type: 'client_credentials', username: email, password })
+      .expect(400);
+    expect(rejected.body.code).toBe('VALIDATION_ERROR');
+
+    const invalid = await request(app.getHttpServer())
+      .post('/api/v1/auth/token')
+      .type('form')
+      .send({
+        grant_type: 'password',
+        username: email,
+        password: 'wrong-password-value',
+      })
+      .expect(401);
+    expect(invalid.body.code).toBe('INVALID_CREDENTIALS');
   });
 });
 

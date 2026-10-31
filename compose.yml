@@ -1,27 +1,20 @@
 services:
-  migrate:
-    build: .
-    image: mobiversite-reservation-system:local
-    entrypoint: ['sh', '-c', 'npx prisma migrate deploy && node prisma/seed.mjs']
-    environment:
-      DATABASE_URL: mysql://mobiversite:mobiversite@mysql:3306/mobiversite
-      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@mobiversite.local}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change-me-admin}
-    depends_on:
-      mysql:
-        condition: service_healthy
-    restart: 'no'
-
   api:
     build: .
     image: mobiversite-reservation-system:local
+    entrypoint:
+      [
+        'sh',
+        '-c',
+        'npx prisma migrate deploy && node prisma/seed.mjs && exec node dist/main.js',
+      ]
     ports:
       - '3000:3000'
     environment:
-      NODE_ENV: production
+      NODE_ENV: development
       PORT: 3000
       DATABASE_URL: mysql://mobiversite:mobiversite@mysql:3306/mobiversite
-      JWT_SECRET: "${JWT_SECRET:-dev-only-change-this-secret-now!}"
+      JWT_SECRET: "${JWT_SECRET:-1234567891011121314151617181920212223242526272829303132}"
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@mobiversite.local}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change-me-admin}
       JWT_EXPIRES_IN_SECONDS: ${JWT_EXPIRES_IN_SECONDS:-86400}
@@ -37,8 +30,8 @@ services:
       RUN_JOBS: "true"
       SWAGGER_ENABLED: "true"
     depends_on:
-      migrate:
-        condition: service_completed_successfully
+      mysql:
+        condition: service_healthy
       payment:
         condition: service_healthy
       redis:
@@ -81,8 +74,6 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports:
-      - '6379:6379'
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 5s

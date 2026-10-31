@@ -7,7 +7,8 @@ import {
   MinLength,
   Validate,
 } from 'class-validator';
-import { PasswordByteLengthConstraint } from '../password.js';
+
+import { PasswordByteLengthConstraint } from '@/auth/password.js';
 
 export class RegisterRequest {
   @ApiProperty({ format: 'email', example: 'ada@example.com', maxLength: 255 })

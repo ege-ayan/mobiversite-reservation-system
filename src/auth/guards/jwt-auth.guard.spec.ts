@@ -1,6 +1,8 @@
 import { ExecutionContext } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { IS_PUBLIC_KEY } from '../decorators/public.decorator.js';
+
+import { IS_PUBLIC_KEY } from '@/auth/decorators/public.decorator.js';
+
 import { JwtAuthGuard } from './jwt-auth.guard.js';
 
 describe('JwtAuthGuard', () => {

@@ -3,11 +3,12 @@ import { Test } from '@nestjs/testing';
 import bcrypt from 'bcryptjs';
 import request from 'supertest';
 import { App } from 'supertest/types.js';
-import { AppModule } from '../../src/app.module.js';
-import { configureApp } from '../../src/config/app.config.js';
-import { Role } from '../../src/generated/prisma/client.js';
-import { PAYMENT_GATEWAY } from '../../src/payment/payment.client.js';
-import { PrismaService } from '../../src/prisma/prisma.service.js';
+
+import { AppModule } from '@/app.module.js';
+import { configureApp } from '@/config/app.config.js';
+import { Role } from '@/generated/prisma/client.js';
+import { PAYMENT_GATEWAY } from '@/payment/payment.client.js';
+import { PrismaService } from '@/prisma/prisma.service.js';
 
 export type PaymentDoubles = {
   confirm: ReturnType<typeof vi.fn>;

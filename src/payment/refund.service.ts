@@ -1,9 +1,11 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { badGateway } from '../common/errors/app.exception.js';
-import { ErrorCode } from '../common/errors/error-code.js';
-import { PaymentState, Prisma } from '../generated/prisma/client.js';
-import { PrismaService } from '../prisma/prisma.service.js';
-import { amountOf } from '../bookings/booking-amount.js';
+
+import { amountOf } from '@/bookings/booking-amount.js';
+import { badGateway } from '@/common/errors/app.exception.js';
+import { ErrorCode } from '@/common/errors/error-code.js';
+import { PaymentState, Prisma } from '@/generated/prisma/client.js';
+import { PrismaService } from '@/prisma/prisma.service.js';
+
 import { PAYMENT_GATEWAY, type PaymentGateway } from './payment.client.js';
 
 @Injectable()

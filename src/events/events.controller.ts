@@ -12,24 +12,27 @@ import {
   Query,
 } from '@nestjs/common';
 import {
-  ApiBearerAuth,
-  ApiQuery,
-  ApiConflictResponse,
   ApiAcceptedResponse,
+  ApiBearerAuth,
+  ApiConflictResponse,
   ApiCreatedResponse,
   ApiForbiddenResponse,
   ApiNotFoundResponse,
+  ApiOAuth2,
   ApiOkResponse,
   ApiOperation,
+  ApiQuery,
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
-import { Role } from '../generated/prisma/client.js';
-import { HttpErrorResponse } from '../common/dto/error-response.js';
-import { Roles } from '../auth/decorators/roles.decorator.js';
-import { ApiPageQueries, PageQuery } from '../common/pagination/page-query.js';
-import { BookingQueryService } from '../bookings/booking-query.service.js';
-import { AdminBookingPage } from '../bookings/dto/admin-booking-page.js';
+
+import { Roles } from '@/auth/decorators/roles.decorator.js';
+import { BookingQueryService } from '@/bookings/booking-query.service.js';
+import { AdminBookingPage } from '@/bookings/dto/admin-booking-page.js';
+import { HttpErrorResponse } from '@/common/dto/error-response.js';
+import { ApiPageQueries, PageQuery } from '@/common/pagination/page-query.js';
+import { Role } from '@/generated/prisma/client.js';
+
 import { EventCancellationResponse } from './dto/event-cancellation-response.js';
 import { EventPage } from './dto/event-page.js';
 import { EventQuery } from './dto/event-query.js';
@@ -39,6 +42,7 @@ import { EventsService } from './events.service.js';
 
 @ApiTags('Events')
 @ApiBearerAuth()
+@ApiOAuth2([])
 @ApiUnauthorizedResponse({ description: 'Missing or invalid access token' })
 @Controller('events')
 export class EventsController {

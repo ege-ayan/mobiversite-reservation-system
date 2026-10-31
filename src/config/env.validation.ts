@@ -15,6 +15,9 @@ function envBoolean(defaultValue: boolean) {
   }, z.boolean());
 }
 
+export const developmentJwtSecret =
+  '1234567891011121314151617181920212223242526272829303132';
+
 export const environmentSchema = z
   .object({
     NODE_ENV: z
@@ -22,7 +25,10 @@ export const environmentSchema = z
       .default('development'),
     PORT: z.coerce.number().int().min(0).max(65535).default(3000),
     DATABASE_URL: z.url(),
-    JWT_SECRET: z.string().min(1),
+    JWT_SECRET: z.preprocess(
+      (value) => (value === undefined || value === '' ? undefined : value),
+      z.string().min(1).optional(),
+    ),
     JWT_EXPIRES_IN_SECONDS: z.coerce.number().int().positive().default(86_400),
     PAYMENT_SERVICE_URL: z.url(),
     RESERVATION_HOLD_MS: z.coerce.number().int().positive().default(1_800_000),
@@ -56,7 +62,18 @@ export const environmentSchema = z
     ),
   })
   .superRefine((value, context) => {
-    if (value.NODE_ENV === 'production' && value.JWT_SECRET.length < 32) {
+    if (value.NODE_ENV === 'production' && value.JWT_SECRET === undefined) {
+      context.addIssue({
+        code: 'custom',
+        path: ['JWT_SECRET'],
+        message: 'JWT_SECRET is required in production',
+      });
+    }
+    if (
+      value.NODE_ENV === 'production' &&
+      value.JWT_SECRET !== undefined &&
+      value.JWT_SECRET.length < 32
+    ) {
       context.addIssue({
         code: 'custom',
         path: ['JWT_SECRET'],
@@ -84,6 +101,7 @@ export const environmentSchema = z
   })
   .transform((value) => ({
     ...value,
+    JWT_SECRET: value.JWT_SECRET ?? developmentJwtSecret,
     SWAGGER_ENABLED:
       value.SWAGGER_ENABLED === undefined
         ? value.NODE_ENV !== 'production'

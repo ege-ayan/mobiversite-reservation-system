@@ -1,4 +1,4 @@
-import { environmentSchema } from './env.validation.js';
+import { developmentJwtSecret, environmentSchema } from './env.validation.js';
 
 describe('environmentSchema', () => {
   const valid = {
@@ -82,6 +82,16 @@ describe('environmentSchema', () => {
     expect(enabled.SWAGGER_ENABLED).toBe(true);
     expect(enabled.TRUST_PROXY).toBe(1);
     expect(enabled.RUN_JOBS).toBe(false);
+  });
+
+  it('uses the numbered development secret when JWT_SECRET is unset', () => {
+    const { JWT_SECRET: _secret, ...withoutSecret } = valid;
+    const parsed = environmentSchema.parse(withoutSecret);
+
+    expect(parsed.JWT_SECRET).toBe(developmentJwtSecret);
+    expect(developmentJwtSecret).toBe(
+      Array.from({ length: 32 }, (_, index) => String(index + 1)).join(''),
+    );
   });
 
   it('rejects a short JWT secret in production', () => {

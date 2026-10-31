@@ -1,5 +1,6 @@
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
+
 import { ApiPageQueries, PageQuery } from './page-query.js';
 
 describe('PageQuery', () => {

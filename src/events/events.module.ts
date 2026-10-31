@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
-import { BookingQueryModule } from '../bookings/booking-query.module.js';
-import { InventoryModule } from '../inventory/inventory.module.js';
+
+import { BookingQueryModule } from '@/bookings/booking-query.module.js';
+import { InventoryModule } from '@/inventory/inventory.module.js';
+
 import { AdminEventsController } from './admin-events.controller.js';
 import { EventCancellationModule } from './event-cancellation.module.js';
 import { EventsController } from './events.controller.js';

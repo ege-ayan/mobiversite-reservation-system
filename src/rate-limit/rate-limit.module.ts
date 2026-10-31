@@ -1,10 +1,12 @@
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ThrottlerModule, type ThrottlerStorage } from '@nestjs/throttler';
-import type { EnvironmentVariables } from '../config/env.validation.js';
+
+import type { EnvironmentVariables } from '@/config/env.validation.js';
+
 import {
-  RATE_LIMIT_STORAGE,
   createRateLimitStorage,
+  RATE_LIMIT_STORAGE,
 } from './rate-limit.storage.js';
 
 @Module({

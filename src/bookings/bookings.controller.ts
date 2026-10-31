@@ -11,6 +11,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import {
   ApiBadRequestResponse,
   ApiBearerAuth,
@@ -19,27 +20,29 @@ import {
   ApiForbiddenResponse,
   ApiHeader,
   ApiNotFoundResponse,
+  ApiOAuth2,
   ApiOkResponse,
   ApiOperation,
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
-import { ConfigService } from '@nestjs/config';
-import { HttpErrorResponse } from '../common/dto/error-response.js';
-import type { EnvironmentVariables } from '../config/env.validation.js';
-import type { AuthenticatedUser } from '../auth/types/authenticated-user.js';
-import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
-import { Roles } from '../auth/decorators/roles.decorator.js';
-import { Role } from '../generated/prisma/client.js';
-import { mockPaymentDecision } from '../payment/payment.client.js';
-import { ApiPageQueries, PageQuery } from '../common/pagination/page-query.js';
+
+import { CurrentUser } from '@/auth/decorators/current-user.decorator.js';
+import { Roles } from '@/auth/decorators/roles.decorator.js';
+import type { AuthenticatedUser } from '@/auth/types/authenticated-user.js';
+import { HttpErrorResponse } from '@/common/dto/error-response.js';
+import { ApiPageQueries, PageQuery } from '@/common/pagination/page-query.js';
+import type { EnvironmentVariables } from '@/config/env.validation.js';
+import { Role } from '@/generated/prisma/client.js';
+import { mockPaymentDecision } from '@/payment/payment.client.js';
+
 import { BookingsService } from './bookings.service.js';
-import { BookingThrottlerGuard } from './guards/booking-throttler.guard.js';
-import { parseIdempotencyKey } from './idempotency-key.js';
 import { BookingPage } from './dto/booking-page.js';
 import { BookingRequest } from './dto/booking-request.js';
 import { BookingResponse } from './dto/booking-response.js';
+import { BookingThrottlerGuard } from './guards/booking-throttler.guard.js';
+import { parseIdempotencyKey } from './idempotency-key.js';
 
 const forbidden = {
   description: 'Insufficient role',
@@ -53,6 +56,7 @@ const forbidden = {
 
 @ApiTags('Bookings')
 @ApiBearerAuth()
+@ApiOAuth2([])
 @ApiUnauthorizedResponse({ description: 'Missing or invalid access token' })
 @ApiForbiddenResponse(forbidden)
 @SkipThrottle({ auth: true })

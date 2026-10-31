@@ -1,4 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
+
 import { AdminEventResponse } from './admin-event-response.js';
 
 export class AdminEventPage {

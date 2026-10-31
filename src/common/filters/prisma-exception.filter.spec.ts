@@ -1,6 +1,7 @@
-import { type ArgumentsHost } from '@nestjs/common';
-import { Prisma } from '../../generated/prisma/client.js';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, type ArgumentsHost } from '@nestjs/common';
+
+import { Prisma } from '@/generated/prisma/client.js';
+
 import { AppExceptionFilter } from './prisma-exception.filter.js';
 
 describe('AppExceptionFilter', () => {

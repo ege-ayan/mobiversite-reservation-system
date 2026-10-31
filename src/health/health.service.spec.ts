@@ -1,7 +1,9 @@
 import { ServiceUnavailableException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { RATE_LIMIT_STORAGE } from '../rate-limit/rate-limit.storage.js';
-import { PrismaService } from '../prisma/prisma.service.js';
+
+import { PrismaService } from '@/prisma/prisma.service.js';
+import { RATE_LIMIT_STORAGE } from '@/rate-limit/rate-limit.storage.js';
+
 import { HealthService } from './health.service.js';
 
 describe('HealthService', () => {

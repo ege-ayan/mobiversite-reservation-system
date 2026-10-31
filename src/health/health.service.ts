@@ -3,8 +3,9 @@ import {
   Injectable,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { RATE_LIMIT_STORAGE } from '../rate-limit/rate-limit.storage.js';
-import { PrismaService } from '../prisma/prisma.service.js';
+
+import { PrismaService } from '@/prisma/prisma.service.js';
+import { RATE_LIMIT_STORAGE } from '@/rate-limit/rate-limit.storage.js';
 
 @Injectable()
 export class HealthService {

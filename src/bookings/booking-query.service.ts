@@ -1,11 +1,13 @@
 import { Injectable } from '@nestjs/common';
-import { notFound } from '../common/errors/app.exception.js';
-import { decodeCursor, slicePage } from '../common/pagination/cursor.js';
+
+import { notFound } from '@/common/errors/app.exception.js';
+import { decodeCursor, slicePage } from '@/common/pagination/cursor.js';
 import {
   DEFAULT_PAGE_LIMIT,
   type PageQuery,
-} from '../common/pagination/page-query.js';
-import { PrismaService } from '../prisma/prisma.service.js';
+} from '@/common/pagination/page-query.js';
+import { PrismaService } from '@/prisma/prisma.service.js';
+
 import {
   toAdminBookingResponse,
   toBookingResponse,

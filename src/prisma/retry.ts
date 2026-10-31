@@ -1,4 +1,5 @@
-import { Prisma } from '../generated/prisma/client.js';
+import { Prisma } from '@/generated/prisma/client.js';
+
 import { WRITE_TRANSACTION } from './transaction.js';
 
 type WriteClient = {

@@ -1,13 +1,16 @@
 import { createHash, randomBytes } from 'node:crypto';
+
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import bcrypt from 'bcryptjs';
-import { conflict, unauthorized } from '../common/errors/app.exception.js';
-import { ErrorCode } from '../common/errors/error-code.js';
-import type { EnvironmentVariables } from '../config/env.validation.js';
-import { Prisma, type Role } from '../generated/prisma/client.js';
-import { PrismaService } from '../prisma/prisma.service.js';
+
+import { conflict, unauthorized } from '@/common/errors/app.exception.js';
+import { ErrorCode } from '@/common/errors/error-code.js';
+import type { EnvironmentVariables } from '@/config/env.validation.js';
+import { Prisma, type Role } from '@/generated/prisma/client.js';
+import { PrismaService } from '@/prisma/prisma.service.js';
+
 import type { LoginRequest } from './dto/login-request.js';
 import type { LoginResponse } from './dto/login-response.js';
 import type { RegisterRequest } from './dto/register-request.js';

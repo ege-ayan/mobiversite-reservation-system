@@ -1,7 +1,10 @@
+import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { BookingsService } from '../bookings/bookings.service.js';
-import type { EnvironmentVariables } from '../config/env.validation.js';
-import { EventCancellationService } from '../events/event-cancellation.service.js';
+
+import { BookingsService } from '@/bookings/bookings.service.js';
+import type { EnvironmentVariables } from '@/config/env.validation.js';
+import { EventCancellationService } from '@/events/event-cancellation.service.js';
+
 import { ReservationScheduler } from './reservation.scheduler.js';
 
 describe('ReservationScheduler', () => {
@@ -36,12 +39,20 @@ describe('ReservationScheduler', () => {
   });
 
   it('reconciles payments when the expiry sweep fails', async () => {
+    const error = vi
+      .spyOn(Logger.prototype, 'error')
+      .mockImplementation(() => undefined);
     bookings.releaseExpiredHolds.mockRejectedValue(new Error('lock failed'));
 
     await expect(scheduler.releaseExpiredHolds()).resolves.toBeUndefined();
     await expect(scheduler.reconcilePayments()).resolves.toBeUndefined();
 
+    expect(error).toHaveBeenCalledWith(
+      'Failed to release expired holds',
+      expect.stringContaining('lock failed'),
+    );
     expect(bookings.reconcilePayments).toHaveBeenCalledOnce();
+    error.mockRestore();
   });
 
   it('does nothing when background jobs are disabled', async () => {

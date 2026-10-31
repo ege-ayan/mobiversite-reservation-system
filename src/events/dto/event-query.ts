@@ -1,6 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsDateString, IsOptional, IsString, MaxLength } from 'class-validator';
-import { PageQuery } from '../../common/pagination/page-query.js';
+
+import { PageQuery } from '@/common/pagination/page-query.js';
 
 export class EventQuery extends PageQuery {
   @ApiPropertyOptional({
