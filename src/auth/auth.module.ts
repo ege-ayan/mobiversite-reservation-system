@@ -3,8 +3,8 @@ import { ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
-import { ThrottlerModule } from '@nestjs/throttler';
 import type { EnvironmentVariables } from '../config/env.validation.js';
+import { RateLimitModule } from '../rate-limit/rate-limit.module.js';
 import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
@@ -23,17 +23,7 @@ import { JwtStrategy } from './strategies/jwt.strategy.js';
         },
       }),
     }),
-    ThrottlerModule.forRootAsync({
-      inject: [ConfigService],
-      useFactory: (config: ConfigService<EnvironmentVariables, true>) => ({
-        throttlers: [
-          {
-            ttl: config.get('AUTH_RATE_TTL_MS', { infer: true }),
-            limit: config.get('AUTH_RATE_LIMIT', { infer: true }),
-          },
-        ],
-      }),
-    }),
+    RateLimitModule,
   ],
   controllers: [AuthController],
   providers: [

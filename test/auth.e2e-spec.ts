@@ -113,6 +113,31 @@ describe('Auth (e2e)', () => {
       .expect(400);
   });
 
+  it('returns the signed-in user from the access token', async () => {
+    const email = uniqueEmail();
+    const registered = await request(app.getHttpServer())
+      .post('/auth/register')
+      .send({ email, password })
+      .expect(201);
+    const login = await request(app.getHttpServer())
+      .post('/auth/login')
+      .send({ email, password })
+      .expect(200);
+
+    await request(app.getHttpServer()).get('/auth/me').expect(401);
+    const me = await request(app.getHttpServer())
+      .get('/auth/me')
+      .set('Authorization', `Bearer ${login.body.accessToken}`)
+      .expect(200);
+
+    expect(me.body).toMatchObject({
+      id: registered.body.id,
+      email,
+      role: 'CUSTOMER',
+    });
+    expect(me.body).not.toHaveProperty('passwordHash');
+  });
+
   it('logs in and returns a JWT that matches the user', async () => {
     const email = uniqueEmail();
     const registered = await request(app.getHttpServer())

@@ -1,17 +1,17 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { BookingsService } from '../bookings/bookings.service.js';
-import { Prisma } from '../generated/prisma/client.js';
-import { decodeCursor, slicePage } from '../pagination/cursor.js';
-import {
-  DEFAULT_PAGE_LIMIT,
-  type PageQuery,
-} from '../pagination/page-query.js';
+import { decodeCursor, slicePage } from '../common/pagination/cursor.js';
+import { DEFAULT_PAGE_LIMIT } from '../common/pagination/page-query.js';
+import { BookingStatus, Prisma } from '../generated/prisma/client.js';
+import { InventoryService } from '../inventory/inventory.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { EventPage } from './dto/event-page.js';
+import type { EventQuery } from './dto/event-query.js';
 import type { EventRequest } from './dto/event-request.js';
 import type { EventResponse } from './dto/event-response.js';
 import {
@@ -24,6 +24,7 @@ export class EventsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly bookings: BookingsService,
+    private readonly inventory: InventoryService,
   ) {}
 
   async create(request: EventRequest): Promise<EventResponse> {
@@ -36,12 +37,13 @@ export class EventsService {
     return toEventResponse(event);
   }
 
-  async list(query: PageQuery): Promise<EventPage> {
+  async list(query: EventQuery): Promise<EventPage> {
     const limit = query.limit ?? DEFAULT_PAGE_LIMIT;
     const cursor = query.cursor ? decodeCursor(query.cursor) : null;
     const events = await this.prisma.event.findMany({
       where: {
         deletedAt: null,
+        ...this.catalogFilter(query),
         ...(cursor
           ? {
               OR: [
@@ -67,49 +69,92 @@ export class EventsService {
   }
 
   async update(id: string, request: EventRequest): Promise<EventResponse> {
-    const event = await this.findEvent(id);
-    const reserved = event.totalTickets - event.availableTickets;
-    if (request.totalTickets < reserved) {
-      throw new ConflictException(
-        'Ticket total is below existing reservations',
-      );
-    }
-
-    const updated = await this.prisma.event.update({
-      where: { id },
-      data: {
-        ...this.toWriteData(request),
-        availableTickets: request.totalTickets - reserved,
-      },
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const locked = await this.inventory.lockEvent(tx, id);
+      if (!locked) {
+        throw new NotFoundException('Event not found');
+      }
+      await this.inventory.releaseExpiredHolds(tx, id, new Date());
+      const event = await tx.event.findUnique({ where: { id } });
+      if (!event || event.deletedAt) {
+        throw new NotFoundException('Event not found');
+      }
+      const reserved = event.totalTickets - event.availableTickets;
+      if (request.totalTickets < reserved) {
+        throw new ConflictException(
+          'Ticket total is below existing reservations',
+        );
+      }
+      return tx.event.update({
+        where: { id },
+        data: {
+          ...this.toWriteData(request),
+          availableTickets: {
+            increment: request.totalTickets - event.totalTickets,
+          },
+        },
+      });
     });
     return toEventResponse(updated);
   }
 
   async remove(id: string): Promise<void> {
+    await this.requireVisibleEvent(id);
+    await this.bookings.settleReservations(id);
     await this.prisma.$transaction(async (tx) => {
-      const locked = await tx.$queryRaw<Array<{ id: string }>>`
-        SELECT id FROM events WHERE id = ${id} FOR UPDATE
-      `;
-      if (locked.length === 0) {
+      const locked = await this.inventory.lockEvent(tx, id);
+      if (!locked) {
         throw new NotFoundException('Event not found');
       }
-
       const event = await tx.event.findUnique({ where: { id } });
       if (!event || event.deletedAt) {
         throw new NotFoundException('Event not found');
       }
-
-      const returned = await this.bookings.cancelOpenReservations(tx, id);
-      await tx.event.update({
-        where: { id },
-        data: {
-          deletedAt: new Date(),
-          ...(returned > 0
-            ? { availableTickets: { increment: returned } }
-            : {}),
+      const open = await tx.booking.count({
+        where: {
+          eventId: id,
+          status: { in: [BookingStatus.HELD, BookingStatus.PAID] },
         },
       });
+      if (open > 0) {
+        throw new ConflictException('Event still has open reservations');
+      }
+      await tx.event.update({
+        where: { id },
+        data: { deletedAt: new Date() },
+      });
     });
+  }
+
+  private async requireVisibleEvent(id: string): Promise<void> {
+    await this.prisma.$transaction(async (tx) => {
+      const locked = await this.inventory.lockEvent(tx, id);
+      if (!locked) {
+        throw new NotFoundException('Event not found');
+      }
+      const event = await tx.event.findUnique({ where: { id } });
+      if (!event || event.deletedAt) {
+        throw new NotFoundException('Event not found');
+      }
+    });
+  }
+
+  private catalogFilter(query: EventQuery): Prisma.EventWhereInput {
+    const title = query.q?.trim();
+    if (query.from && query.to && new Date(query.from) > new Date(query.to)) {
+      throw new BadRequestException('from must be before to');
+    }
+    return {
+      ...(title ? { title: { contains: title } } : {}),
+      ...(query.from || query.to
+        ? {
+            startsAt: {
+              ...(query.from ? { gte: new Date(query.from) } : {}),
+              ...(query.to ? { lte: new Date(query.to) } : {}),
+            },
+          }
+        : {}),
+    };
   }
 
   private async findEvent(id: string): Promise<EventResponseSource> {

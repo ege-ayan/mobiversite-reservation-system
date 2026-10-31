@@ -1,7 +1,12 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { BookingsService } from '../bookings/bookings.service.js';
 import { Prisma } from '../generated/prisma/client.js';
+import { InventoryService } from '../inventory/inventory.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { EventsService } from './events.service.js';
 
@@ -23,7 +28,7 @@ describe('EventsService', () => {
     update: vi.fn(),
     delete: vi.fn(),
   };
-  const reservations = { cancelOpenReservations: vi.fn() };
+  const reservations = { settleReservations: vi.fn() };
   const transaction = vi.fn();
 
   beforeEach(async () => {
@@ -31,7 +36,7 @@ describe('EventsService', () => {
     events.findUnique.mockReset();
     events.update.mockReset();
     events.delete.mockReset();
-    reservations.cancelOpenReservations.mockReset();
+    reservations.settleReservations.mockReset();
     transaction.mockReset();
 
     const moduleRef = await Test.createTestingModule({
@@ -42,6 +47,7 @@ describe('EventsService', () => {
           useValue: { event: events, $transaction: transaction },
         },
         { provide: BookingsService, useValue: reservations },
+        InventoryService,
       ],
     }).compile();
 
@@ -74,61 +80,37 @@ describe('EventsService', () => {
   });
 
   it('rejects a ticket total below the reservations already held', async () => {
-    events.findUnique.mockResolvedValue({
-      id: 'event-id',
-      totalTickets: 10,
-      availableTickets: 4,
-    });
+    const tx = lockedEventTx(
+      storedEvent({ totalTickets: 10, availableTickets: 4 }),
+    );
+    transaction.mockImplementation(
+      async (run: (client: typeof tx) => unknown) => run(tx),
+    );
 
     await expect(
       service.update('event-id', { ...request, totalTickets: 5 }),
     ).rejects.toBeInstanceOf(ConflictException);
-    expect(events.update).not.toHaveBeenCalled();
+    expect(tx.event.update).not.toHaveBeenCalled();
   });
 
-  it('cancels open reservations and hides the event', async () => {
-    const tx = {
-      $queryRaw: vi.fn().mockResolvedValue([{ id: 'event-id' }]),
-      event: {
-        findUnique: vi.fn().mockResolvedValue({
-          id: 'event-id',
-          deletedAt: null,
-        }),
-        update: vi.fn(),
-      },
-    };
+  it('settles reservations and then hides the event', async () => {
+    const tx = lockedEventTx(storedEvent());
     transaction.mockImplementation(
       async (run: (client: typeof tx) => unknown) => run(tx),
     );
-    reservations.cancelOpenReservations.mockResolvedValue(3);
 
     await service.remove('event-id');
 
-    expect(reservations.cancelOpenReservations).toHaveBeenCalledWith(
-      tx,
-      'event-id',
-    );
+    expect(reservations.settleReservations).toHaveBeenCalledWith('event-id');
     expect(tx.event.update).toHaveBeenCalledWith({
       where: { id: 'event-id' },
-      data: {
-        deletedAt: expect.any(Date),
-        availableTickets: { increment: 3 },
-      },
+      data: { deletedAt: expect.any(Date) },
     });
     expect(events.delete).not.toHaveBeenCalled();
   });
 
   it('rejects deleting an event that is already hidden', async () => {
-    const tx = {
-      $queryRaw: vi.fn().mockResolvedValue([{ id: 'event-id' }]),
-      event: {
-        findUnique: vi.fn().mockResolvedValue({
-          id: 'event-id',
-          deletedAt: new Date(),
-        }),
-        update: vi.fn(),
-      },
-    };
+    const tx = lockedEventTx(storedEvent({ deletedAt: new Date() }));
     transaction.mockImplementation(
       async (run: (client: typeof tx) => unknown) => run(tx),
     );
@@ -136,7 +118,7 @@ describe('EventsService', () => {
     await expect(service.remove('event-id')).rejects.toBeInstanceOf(
       NotFoundException,
     );
-    expect(reservations.cancelOpenReservations).not.toHaveBeenCalled();
+    expect(reservations.settleReservations).not.toHaveBeenCalled();
     expect(tx.event.update).not.toHaveBeenCalled();
   });
 
@@ -163,24 +145,29 @@ describe('EventsService', () => {
     );
   });
 
-  it('replaces an event and keeps the reserved ticket count', async () => {
-    events.findUnique.mockResolvedValue(
-      storedEvent({ totalTickets: 10, availableTickets: 4 }),
-    );
-    events.update.mockImplementation(async ({ data }) => ({
-      ...storedEvent(),
-      ...data,
+  it('replaces an event under a row lock and keeps the reserved ticket count', async () => {
+    const current = storedEvent({ totalTickets: 10, availableTickets: 4 });
+    const tx = lockedEventTx(current);
+    tx.event.update.mockImplementation(async ({ data }) => ({
+      ...current,
+      title: data.title,
+      description: data.description,
+      venue: data.venue,
       ticketPrice: new Prisma.Decimal(data.ticketPrice),
       startsAt: new Date(data.startsAt),
+      totalTickets: data.totalTickets,
     }));
+    transaction.mockImplementation(
+      async (run: (client: typeof tx) => unknown) => run(tx),
+    );
 
     const result = await service.update('event-id', request);
 
-    expect(events.update).toHaveBeenCalledWith({
+    expect(tx.event.update).toHaveBeenCalledWith({
       where: { id: 'event-id' },
       data: expect.objectContaining({
         totalTickets: 10,
-        availableTickets: 4,
+        availableTickets: { increment: 0 },
       }),
     });
     expect(result.availableTickets).toBe(4);
@@ -223,30 +210,64 @@ describe('EventsService', () => {
     await expect(service.remove('missing')).rejects.toBeInstanceOf(
       NotFoundException,
     );
-    expect(reservations.cancelOpenReservations).not.toHaveBeenCalled();
+    expect(reservations.settleReservations).not.toHaveBeenCalled();
   });
 
-  it('hides an event that has no open reservations', async () => {
-    const tx = {
-      $queryRaw: vi.fn().mockResolvedValue([{ id: 'event-id' }]),
-      event: {
-        findUnique: vi.fn().mockResolvedValue(storedEvent()),
-        update: vi.fn(),
-      },
-    };
-    transaction.mockImplementation(
-      async (run: (client: typeof tx) => unknown) => run(tx),
-    );
-    reservations.cancelOpenReservations.mockResolvedValue(0);
+  it('filters the catalog by title and start time', async () => {
+    events.findMany.mockResolvedValue([]);
 
-    await service.remove('event-id');
-
-    expect(tx.event.update).toHaveBeenCalledWith({
-      where: { id: 'event-id' },
-      data: { deletedAt: expect.any(Date) },
+    await service.list({
+      q: ' live ',
+      from: '2026-12-01T00:00:00.000Z',
+      to: '2026-12-31T00:00:00.000Z',
     });
+
+    expect(events.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          deletedAt: null,
+          title: { contains: 'live' },
+          startsAt: {
+            gte: new Date('2026-12-01T00:00:00.000Z'),
+            lte: new Date('2026-12-31T00:00:00.000Z'),
+          },
+        },
+      }),
+    );
+
+    await expect(
+      service.list({
+        from: '2026-12-31T00:00:00.000Z',
+        to: '2026-12-01T00:00:00.000Z',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 });
+
+function lockedEventTx(event: ReturnType<typeof storedEvent>) {
+  return {
+    $queryRaw: vi
+      .fn()
+      .mockImplementation(
+        (query: TemplateStringsArray | { strings: string[] }) => {
+          const text = Array.isArray(query)
+            ? query.join(' ')
+            : query.strings.join(' ');
+          if (text.includes('FROM events')) {
+            return [{ id: event.id }];
+          }
+          return [];
+        },
+      ),
+    event: {
+      findUnique: vi.fn().mockResolvedValue(event),
+      update: vi.fn(),
+    },
+    booking: {
+      count: vi.fn().mockResolvedValue(0),
+    },
+  };
+}
 
 function storedEvent(overrides: Record<string, unknown> = {}) {
   return {

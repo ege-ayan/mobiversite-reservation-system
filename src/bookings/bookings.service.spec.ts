@@ -7,9 +7,12 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { BookingStatus, Prisma } from '../generated/prisma/client.js';
+import { InventoryService } from '../inventory/inventory.service.js';
+import { PAYMENT_GATEWAY } from '../payment/payment.client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { BookingsService } from './bookings.service.js';
-import { PaymentClient } from './payment.client.js';
+import { requestFingerprint } from './idempotency-key.js';
+import { SweepLock } from './sweep-lock.js';
 
 const event = {
   id: 'event-id',
@@ -36,11 +39,21 @@ describe('BookingsService', () => {
   const bookings = {
     findMany: vi.fn(),
     findFirst: vi.fn(),
+    findUnique: vi.fn(),
     findUniqueOrThrow: vi.fn(),
     create: vi.fn(),
     updateMany: vi.fn(),
   };
-  const payments = { confirm: vi.fn() };
+  let transaction: ReturnType<typeof vi.fn>;
+  const payments = {
+    confirm: vi.fn(),
+    refund: vi.fn(),
+  };
+  const sweepLock = {
+    tryWithLock: vi.fn(async (_name: string, work: () => Promise<unknown>) =>
+      work(),
+    ),
+  };
   const queryRaw = vi.fn();
   const tx = {
     event: events,
@@ -55,6 +68,7 @@ describe('BookingsService', () => {
     events.findUniqueOrThrow.mockResolvedValue(event);
     events.updateMany.mockResolvedValue({ count: 1 });
     bookings.findMany.mockResolvedValue([]);
+    bookings.findUnique.mockResolvedValue(null);
     bookings.updateMany.mockImplementation(async () => {
       const count = due.length;
       due = [];
@@ -85,20 +99,23 @@ describe('BookingsService', () => {
       },
     );
 
+    transaction = vi.fn(async (run: (client: typeof tx) => Promise<unknown>) =>
+      run(tx),
+    );
     const prisma = {
       event: events,
       booking: bookings,
       $queryRaw: queryRaw,
-      $transaction: vi.fn(
-        async (run: (client: typeof tx) => Promise<unknown>) => run(tx),
-      ),
+      $transaction: transaction,
     };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
         BookingsService,
+        InventoryService,
         { provide: PrismaService, useValue: prisma },
-        { provide: PaymentClient, useValue: payments },
+        { provide: PAYMENT_GATEWAY, useValue: payments },
+        { provide: SweepLock, useValue: sweepLock },
         { provide: ConfigService, useValue: { get: () => 1_800_000 } },
       ],
     }).compile();
@@ -207,10 +224,12 @@ describe('BookingsService', () => {
     const booking = { ...heldBooking(), event };
     bookings.findFirst.mockResolvedValue(booking);
     payments.confirm.mockResolvedValue(false);
+    payments.refund.mockResolvedValue(true);
 
     await expect(service.pay('user-id', booking.id)).rejects.toBeInstanceOf(
       ConflictException,
     );
+    expect(payments.refund).not.toHaveBeenCalled();
     expect(payments.confirm).toHaveBeenCalledWith({
       bookingId: booking.id,
       amount: '25.00',
@@ -239,18 +258,78 @@ describe('BookingsService', () => {
     });
   });
 
-  it('cancels held and paid reservations for one event', async () => {
-    bookings.findMany.mockResolvedValue([{ quantity: 2 }, { quantity: 1 }]);
+  it('refunds paid reservations and cancels holds when an event is removed', async () => {
+    bookings.findMany
+      .mockResolvedValueOnce([{ quantity: 1 }])
+      .mockResolvedValueOnce([
+        {
+          id: 'paid-id',
+          quantity: 2,
+          ticketPrice: new Prisma.Decimal('25.00'),
+        },
+      ]);
+    bookings.updateMany.mockResolvedValue({ count: 1 });
+    payments.refund.mockResolvedValue(true);
 
-    await expect(service.cancelOpenReservations(tx, event.id)).resolves.toBe(3);
+    await service.settleReservations(event.id);
 
     expect(bookings.updateMany).toHaveBeenCalledWith({
-      where: {
-        eventId: event.id,
-        status: { in: [BookingStatus.HELD, BookingStatus.PAID] },
-      },
+      where: { eventId: event.id, status: BookingStatus.HELD },
       data: { status: BookingStatus.CANCELLED },
     });
+    expect(payments.refund).toHaveBeenCalledWith({
+      bookingId: 'paid-id',
+      amount: '50.00',
+    });
+    expect(bookings.updateMany).toHaveBeenCalledWith({
+      where: { id: 'paid-id', status: BookingStatus.PAID },
+      data: { status: BookingStatus.REFUNDED },
+    });
+    expect(events.update).toHaveBeenCalledWith({
+      where: { id: event.id },
+      data: { availableTickets: { increment: 2 } },
+    });
+  });
+
+  it('refunds a paid reservation and returns its tickets', async () => {
+    const booking = {
+      ...heldBooking(),
+      status: BookingStatus.PAID,
+      quantity: 2,
+      event,
+    };
+    bookings.findFirst.mockResolvedValue(booking);
+    bookings.updateMany.mockResolvedValue({ count: 1 });
+    bookings.findUniqueOrThrow.mockResolvedValue({
+      ...booking,
+      status: BookingStatus.REFUNDED,
+    });
+    payments.refund.mockResolvedValue(true);
+
+    const result = await service.cancel('user-id', booking.id);
+
+    expect(payments.refund).toHaveBeenCalledWith({
+      bookingId: booking.id,
+      amount: '50.00',
+    });
+    expect(events.update).toHaveBeenCalledWith({
+      where: { id: event.id },
+      data: { availableTickets: { increment: 2 } },
+    });
+    expect(result.status).toBe(BookingStatus.REFUNDED);
+  });
+
+  it('keeps a paid reservation when the event has started', async () => {
+    bookings.findFirst.mockResolvedValue({
+      ...heldBooking(),
+      status: BookingStatus.PAID,
+      event: { ...event, startsAt: new Date(Date.now() - 1_000) },
+    });
+
+    await expect(service.cancel('user-id', 'booking-id')).rejects.toThrow(
+      'Event has already started',
+    );
+    expect(payments.refund).not.toHaveBeenCalled();
   });
 
   it('shows a past hold as expired without writing', async () => {
@@ -285,18 +364,7 @@ describe('BookingsService', () => {
   });
 
   it('skips the sweep when another worker holds the lock', async () => {
-    queryRaw.mockImplementation(
-      async (query: TemplateStringsArray | { strings: string[] }) => {
-        const text = sqlText(query);
-        if (text.includes('GET_LOCK')) {
-          return [{ acquired: 0 }];
-        }
-        if (text.includes('RELEASE_LOCK')) {
-          return [{ released: 1 }];
-        }
-        return [];
-      },
-    );
+    sweepLock.tryWithLock.mockResolvedValueOnce(null);
     due = [{ id: 'hold-a', quantity: 1 }];
 
     await expect(service.releaseExpiredHolds()).resolves.toBe(0);
@@ -398,6 +466,10 @@ describe('BookingsService', () => {
     await expect(service.pay('user-id', 'booking-id')).rejects.toThrow(
       'Reservation can no longer be paid',
     );
+    expect(payments.refund).toHaveBeenCalledWith({
+      bookingId: 'booking-id',
+      amount: '25.00',
+    });
   });
 
   it('refuses payment when the hold is no longer payable after confirmation', async () => {
@@ -408,6 +480,7 @@ describe('BookingsService', () => {
     await expect(service.pay('user-id', 'booking-id')).rejects.toThrow(
       'Reservation can no longer be paid',
     );
+    expect(payments.refund).toHaveBeenCalled();
   });
 
   it('refuses payment when the event lock is lost', async () => {
@@ -434,6 +507,7 @@ describe('BookingsService', () => {
     await expect(service.pay('user-id', 'booking-id')).rejects.toBeInstanceOf(
       NotFoundException,
     );
+    expect(payments.refund).toHaveBeenCalled();
   });
 
   it('pages a customer reservations with a cursor', async () => {
@@ -508,6 +582,91 @@ describe('BookingsService', () => {
     await expect(service.releaseExpiredHolds()).resolves.toBe(0);
     expect(error).toHaveBeenCalled();
     error.mockRestore();
+  });
+
+  it('returns the original reservation for the same idempotency key', async () => {
+    const stored = {
+      ...heldBooking(),
+      event,
+      idempotencyKey: 'same-key',
+      requestHash: requestFingerprint(event.id, 1),
+    };
+    bookings.findUnique.mockResolvedValue(stored);
+
+    const result = await service.reserve(
+      'user-id',
+      { eventId: event.id, quantity: 1 },
+      'same-key',
+    );
+
+    expect(result.id).toBe(stored.id);
+    expect(bookings.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects an idempotency key reused for a different quantity', async () => {
+    bookings.findUnique.mockResolvedValue({
+      ...heldBooking(),
+      event,
+      requestHash: requestFingerprint(event.id, 1),
+    });
+
+    await expect(
+      service.reserve(
+        'user-id',
+        { eventId: event.id, quantity: 2 },
+        'same-key',
+      ),
+    ).rejects.toThrow('Idempotency key was reused for a different request');
+  });
+
+  it('returns the winning reservation when the same key is inserted twice', async () => {
+    const stored = {
+      ...heldBooking(),
+      event,
+      idempotencyKey: 'same-key',
+      requestHash: requestFingerprint(event.id, 1),
+    };
+    bookings.findUnique
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(stored);
+    transaction
+      .mockImplementationOnce(
+        async (run: (client: typeof tx) => Promise<unknown>) => run(tx),
+      )
+      .mockRejectedValueOnce(
+        new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+          code: 'P2002',
+          clientVersion: '0.0.0',
+        }),
+      );
+
+    const result = await service.reserve(
+      'user-id',
+      { eventId: event.id, quantity: 1 },
+      'same-key',
+    );
+
+    expect(result.id).toBe(stored.id);
+    expect(bookings.create).not.toHaveBeenCalled();
+  });
+
+  it('stores the idempotency key on a new hold', async () => {
+    bookings.create.mockResolvedValue({ ...heldBooking(), event });
+
+    await service.reserve(
+      'user-id',
+      { eventId: event.id, quantity: 1 },
+      'same-key',
+    );
+
+    expect(bookings.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          idempotencyKey: 'same-key',
+          requestHash: requestFingerprint(event.id, 1),
+        }),
+      }),
+    );
   });
 });
 

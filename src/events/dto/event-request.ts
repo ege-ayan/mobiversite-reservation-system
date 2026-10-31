@@ -4,10 +4,13 @@ import {
   IsInt,
   IsNumber,
   IsString,
+  Max,
   MaxLength,
   Min,
   MinLength,
+  Validate,
 } from 'class-validator';
+import { FutureDateConstraint } from './future-date.js';
 
 export class EventRequest {
   @ApiProperty({ example: 'Mobiversite Live' })
@@ -32,15 +35,18 @@ export class EventRequest {
     example: '2026-12-01T18:00:00.000Z',
   })
   @IsDateString()
+  @Validate(FutureDateConstraint)
   startsAt: string;
 
-  @ApiProperty({ example: 25, minimum: 0 })
+  @ApiProperty({ example: 25, minimum: 0, maximum: 99_999_999.99 })
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(99_999_999.99)
   ticketPrice: number;
 
-  @ApiProperty({ example: 100, minimum: 1 })
+  @ApiProperty({ example: 100, minimum: 1, maximum: 2_147_483_647 })
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   totalTickets: number;
 }

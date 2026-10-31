@@ -40,6 +40,35 @@ describe('AuthService', () => {
     service = moduleRef.get(AuthService);
   });
 
+  describe('me', () => {
+    it('returns the stored user', async () => {
+      users.findUnique.mockResolvedValue({
+        id: 'user-id',
+        email: 'ada@example.com',
+        role: 'CUSTOMER',
+        passwordHash: 'hash',
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+        updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+      });
+
+      await expect(service.me('user-id')).resolves.toEqual({
+        id: 'user-id',
+        email: 'ada@example.com',
+        role: 'CUSTOMER',
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+        updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+      });
+    });
+
+    it('rejects a token whose user was removed', async () => {
+      users.findUnique.mockResolvedValue(null);
+
+      await expect(service.me('missing')).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
+    });
+  });
+
   describe('register', () => {
     it('stores a customer with a hashed password and omits the hash', async () => {
       users.findUnique.mockResolvedValue(null);

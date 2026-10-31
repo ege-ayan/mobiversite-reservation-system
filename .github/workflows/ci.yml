@@ -1,0 +1,40 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: mobiversite
+          MYSQL_USER: mobiversite
+          MYSQL_PASSWORD: mobiversite
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      NODE_ENV: test
+      DATABASE_URL: mysql://mobiversite:mobiversite@127.0.0.1:3306/mobiversite
+      JWT_SECRET: test-secret-test-secret-test-secret
+      JWT_EXPIRES_IN_SECONDS: 86400
+      PAYMENT_SERVICE_URL: http://127.0.0.1:4000/payments
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+      - run: npm ci
+      - run: npm run ci
+      - run: npx prisma migrate deploy
+      - run: npm run test:e2e

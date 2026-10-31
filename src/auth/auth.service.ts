@@ -41,6 +41,14 @@ export class AuthService {
     });
   }
 
+  async me(userId: string): Promise<UserResponse> {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw new UnauthorizedException();
+    }
+    return toUserResponse(user);
+  }
+
   async register(request: RegisterRequest): Promise<UserResponse> {
     const email = normalizeEmail(request.email);
     const existing = await this.prisma.user.findUnique({ where: { email } });

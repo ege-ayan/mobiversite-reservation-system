@@ -7,9 +7,21 @@ import { PaymentClient } from './payment.client.js';
 describe('PaymentClient', () => {
   let server: Server;
   let client: PaymentClient;
+  let lastRequest: { url?: string; idempotencyKey?: string | string[] };
 
   beforeEach(async () => {
+    lastRequest = {};
     server = createServer((request, response) => {
+      lastRequest = {
+        url: request.url,
+        idempotencyKey: request.headers['idempotency-key'],
+      };
+      request.resume();
+      if (request.url === '/refunds') {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ refunded: true }));
+        return;
+      }
       const paid = request.url === '/paid';
       response.writeHead(paid ? 200 : 402, {
         'content-type': 'application/json',
@@ -35,6 +47,20 @@ describe('PaymentClient', () => {
     await expect(
       client.confirm({ bookingId: 'booking-id', amount: '25.00' }),
     ).resolves.toBe(true);
+    expect(lastRequest.idempotencyKey).toBe('booking-id');
+  });
+
+  it('asks the sibling refund endpoint to return a payment', async () => {
+    const { port } = server.address() as AddressInfo;
+    client = new PaymentClient({
+      get: () => `http://127.0.0.1:${port}/payments`,
+    } as ConfigService);
+
+    await expect(
+      client.refund({ bookingId: 'booking-id', amount: '25.00' }),
+    ).resolves.toBe(true);
+    expect(lastRequest.url).toBe('/refunds');
+    expect(lastRequest.idempotencyKey).toBe('booking-id');
   });
 
   it('reports a declined payment without throwing', async () => {

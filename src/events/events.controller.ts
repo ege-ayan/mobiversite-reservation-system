@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
+  ApiQuery,
   ApiConflictResponse,
   ApiCreatedResponse,
   ApiForbiddenResponse,
@@ -26,8 +27,11 @@ import {
 import { Role } from '../generated/prisma/client.js';
 import { HttpErrorResponse } from '../common/dto/error-response.js';
 import { Roles } from '../auth/decorators/roles.decorator.js';
-import { ApiPageQueries, PageQuery } from '../pagination/page-query.js';
+import { ApiPageQueries, PageQuery } from '../common/pagination/page-query.js';
+import { BookingsService } from '../bookings/bookings.service.js';
+import { AdminBookingPage } from '../bookings/dto/admin-booking-page.js';
 import { EventPage } from './dto/event-page.js';
+import { EventQuery } from './dto/event-query.js';
 import { EventRequest } from './dto/event-request.js';
 import { EventResponse } from './dto/event-response.js';
 import { EventsService } from './events.service.js';
@@ -37,14 +41,45 @@ import { EventsService } from './events.service.js';
 @ApiUnauthorizedResponse({ description: 'Missing or invalid access token' })
 @Controller('events')
 export class EventsController {
-  constructor(private readonly eventsService: EventsService) {}
+  constructor(
+    private readonly eventsService: EventsService,
+    private readonly bookingsService: BookingsService,
+  ) {}
 
   @Get()
   @ApiPageQueries()
+  @ApiQuery({
+    name: 'from',
+    required: false,
+    schema: { type: 'string', format: 'date-time' },
+  })
+  @ApiQuery({
+    name: 'to',
+    required: false,
+    schema: { type: 'string', format: 'date-time' },
+  })
+  @ApiQuery({ name: 'q', required: false, schema: { type: 'string' } })
   @ApiOperation({ summary: 'List events and remaining tickets' })
   @ApiOkResponse({ type: EventPage })
-  list(@Query() query: PageQuery): Promise<EventPage> {
+  list(@Query() query: EventQuery): Promise<EventPage> {
     return this.eventsService.list(query);
+  }
+
+  @Get(':id/bookings')
+  @Roles(Role.ADMIN)
+  @ApiPageQueries()
+  @ApiOperation({ summary: 'List reservations for an event' })
+  @ApiOkResponse({ type: AdminBookingPage })
+  @ApiNotFoundResponse({ description: 'Event not found' })
+  @ApiForbiddenResponse({
+    description: 'Insufficient role',
+    type: HttpErrorResponse,
+  })
+  listBookings(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: PageQuery,
+  ): Promise<AdminBookingPage> {
+    return this.bookingsService.listForEvent(id, query);
   }
 
   @Get(':id')
@@ -91,7 +126,7 @@ export class EventsController {
   @Roles(Role.ADMIN)
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({
-    summary: 'Cancel held and paid reservations, then hide the event',
+    summary: 'Refund paid reservations, cancel holds, then hide the event',
   })
   @ApiNoContentResponse()
   @ApiNotFoundResponse({ description: 'Event not found' })

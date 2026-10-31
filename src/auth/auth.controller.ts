@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Get,
   HttpCode,
   HttpStatus,
   Post,
@@ -8,6 +9,7 @@ import {
 } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
+  ApiBearerAuth,
   ApiConflictResponse,
   ApiCreatedResponse,
   ApiOkResponse,
@@ -16,6 +18,8 @@ import {
   ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import type { AuthenticatedUser } from './types/authenticated-user.js';
+import { CurrentUser } from './decorators/current-user.decorator.js';
 import { AuthService } from './auth.service.js';
 import { Public } from './decorators/public.decorator.js';
 import { AuthThrottlerGuard } from './guards/auth-throttler.guard.js';
@@ -38,13 +42,13 @@ const tooManyRequests = {
   },
 };
 
-@Public()
-@UseGuards(AuthThrottlerGuard)
 @ApiTags('Auth')
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
+  @Public()
+  @UseGuards(AuthThrottlerGuard)
   @Post('login')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Log in and receive a JWT access token' })
@@ -70,6 +74,8 @@ export class AuthController {
     return this.authService.login(body);
   }
 
+  @Public()
+  @UseGuards(AuthThrottlerGuard)
   @Post('register')
   @ApiOperation({ summary: 'Register a customer account' })
   @ApiCreatedResponse({
@@ -92,5 +98,14 @@ export class AuthController {
   @ApiTooManyRequestsResponse(tooManyRequests)
   register(@Body() body: RegisterRequest): Promise<UserResponse> {
     return this.authService.register(body);
+  }
+
+  @Get('me')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Return the signed-in user' })
+  @ApiOkResponse({ type: UserResponse })
+  @ApiUnauthorizedResponse({ description: 'Missing or invalid access token' })
+  me(@CurrentUser() user: AuthenticatedUser): Promise<UserResponse> {
+    return this.authService.me(user.id);
   }
 }

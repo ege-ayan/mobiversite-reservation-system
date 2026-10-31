@@ -5,20 +5,21 @@ import request from 'supertest';
 import { App } from 'supertest/types.js';
 import { AppModule } from '../src/app.module.js';
 import { BookingsService } from '../src/bookings/bookings.service.js';
-import { PaymentClient } from '../src/bookings/payment.client.js';
+import { PAYMENT_GATEWAY } from '../src/payment/payment.client.js';
+import { SWEEP_LOCK_NAME } from '../src/bookings/sweep-lock.js';
 import { configureApp } from '../src/config/app.config.js';
 import { Role } from '../src/generated/prisma/client.js';
 import { PrismaService } from '../src/prisma/prisma.service.js';
 
 describe('Reservations (e2e)', () => {
   let app: INestApplication<App>;
-  const payments = { confirm: vi.fn() };
+  const payments = { confirm: vi.fn(), refund: vi.fn() };
 
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     })
-      .overrideProvider(PaymentClient)
+      .overrideProvider(PAYMENT_GATEWAY)
       .useValue(payments)
       .compile();
 
@@ -30,6 +31,8 @@ describe('Reservations (e2e)', () => {
   beforeEach(() => {
     payments.confirm.mockReset();
     payments.confirm.mockResolvedValue(true);
+    payments.refund.mockReset();
+    payments.refund.mockResolvedValue(true);
   });
 
   afterAll(async () => {
@@ -155,8 +158,29 @@ describe('Reservations (e2e)', () => {
       .set(bearer(customer.token))
       .expect(200);
 
-    expect(cancelled.body.status).toBe('CANCELLED');
+    expect(cancelled.body.status).toBe('REFUNDED');
     expect(cancelled.body.event.availableTickets).toBe(2);
+
+    const one = await request(app.getHttpServer())
+      .get(`/bookings/${reserved.body.id}`)
+      .set(bearer(customer.token))
+      .expect(200);
+    expect(one.body.status).toBe('REFUNDED');
+
+    const forAdmin = await request(app.getHttpServer())
+      .get(`/events/${event.id}/bookings`)
+      .set(bearer(admin.token))
+      .expect(200);
+    expect(forAdmin.body.items).toEqual([
+      expect.objectContaining({
+        id: reserved.body.id,
+        userEmail: customer.email,
+      }),
+    ]);
+    await request(app.getHttpServer())
+      .get(`/events/${event.id}/bookings`)
+      .set(bearer(customer.token))
+      .expect(403);
 
     await request(app.getHttpServer())
       .post(`/bookings/${reserved.body.id}/cancel`)
@@ -514,13 +538,13 @@ describe('Reservations (e2e)', () => {
         SELECT CONNECTION_ID() AS id
       `;
       await tx.$queryRaw`
-        SELECT GET_LOCK('mobiversite_booking_expiry', 0)
+        SELECT GET_LOCK(${SWEEP_LOCK_NAME}, 0)
       `;
       const [during] = await tx.$queryRaw<Array<{ id: number | bigint }>>`
         SELECT CONNECTION_ID() AS id
       `;
       await tx.$queryRaw`
-        SELECT RELEASE_LOCK('mobiversite_booking_expiry')
+        SELECT RELEASE_LOCK(${SWEEP_LOCK_NAME})
       `;
       return [before.id, during.id];
     });
@@ -554,12 +578,12 @@ describe('Reservations (e2e)', () => {
     const holder = app.get(PrismaService).$transaction(
       async (tx) => {
         await tx.$queryRaw`
-          SELECT GET_LOCK('mobiversite_booking_expiry', 5)
+          SELECT GET_LOCK(${SWEEP_LOCK_NAME}, 5)
         `;
         markLocked();
         await untilRelease;
         await tx.$queryRaw`
-          SELECT RELEASE_LOCK('mobiversite_booking_expiry')
+          SELECT RELEASE_LOCK(${SWEEP_LOCK_NAME})
         `;
       },
       { timeout: 20_000 },
@@ -730,8 +754,8 @@ describe('Reservations (e2e)', () => {
       prisma.booking.findUniqueOrThrow({ where: { id: paid.body.id } }),
       prisma.event.findUniqueOrThrow({ where: { id: event.id } }),
     ]);
-    expect(heldBooking.status).toBe('CANCELLED');
-    expect(paidBooking.status).toBe('CANCELLED');
+    expect(heldBooking.status).toBe('EXPIRED');
+    expect(paidBooking.status).toBe('REFUNDED');
     expect(storedEvent.deletedAt).not.toBeNull();
     expect(storedEvent.availableTickets).toBe(4);
 
@@ -749,7 +773,7 @@ describe('Reservations (e2e)', () => {
       .set(bearer(holder.token))
       .expect(200);
     expect(mine.body.items).toEqual([
-      expect.objectContaining({ id: held.body.id, status: 'CANCELLED' }),
+      expect.objectContaining({ id: held.body.id, status: 'EXPIRED' }),
     ]);
 
     await request(app.getHttpServer())
@@ -862,6 +886,118 @@ describe('Reservations (e2e)', () => {
     ]);
     expect(second.body.nextCursor).toBeNull();
   });
+
+  it('replays a reservation for the same idempotency key', async () => {
+    const admin = await loginAs(app, Role.ADMIN);
+    const customer = await loginAs(app, Role.CUSTOMER);
+    const other = await loginAs(app, Role.CUSTOMER);
+    const event = await createEvent(
+      app,
+      admin.token,
+      eventBody({ totalTickets: 4 }),
+    );
+    const key = crypto.randomUUID();
+    const body = { eventId: event.id, quantity: 1 };
+
+    const first = await request(app.getHttpServer())
+      .post('/bookings')
+      .set(bearer(customer.token))
+      .set('Idempotency-Key', key)
+      .send(body)
+      .expect(201);
+
+    const repeated = await Promise.all(
+      Array.from({ length: 2 }, () =>
+        request(app.getHttpServer())
+          .post('/bookings')
+          .set(bearer(customer.token))
+          .set('Idempotency-Key', key)
+          .send(body),
+      ),
+    );
+    expect(repeated.map((response) => response.status)).toEqual([201, 201]);
+    expect(repeated.map((response) => response.body.id)).toEqual([
+      first.body.id,
+      first.body.id,
+    ]);
+
+    const conflict = await request(app.getHttpServer())
+      .post('/bookings')
+      .set(bearer(customer.token))
+      .set('Idempotency-Key', key)
+      .send({ eventId: event.id, quantity: 2 })
+      .expect(409);
+    expect(conflict.body.message).toBe(
+      'Idempotency key was reused for a different request',
+    );
+
+    const separate = await request(app.getHttpServer())
+      .post('/bookings')
+      .set(bearer(other.token))
+      .set('Idempotency-Key', key)
+      .send(body)
+      .expect(201);
+    expect(separate.body.id).not.toBe(first.body.id);
+
+    const listed = await request(app.getHttpServer())
+      .get(`/events/${event.id}`)
+      .set(bearer(customer.token))
+      .expect(200);
+    expect(listed.body.availableTickets).toBe(2);
+
+    await request(app.getHttpServer())
+      .post('/bookings')
+      .set(bearer(customer.token))
+      .set('Idempotency-Key', 'has space')
+      .send(body)
+      .expect(400);
+  });
+
+  it('rejects an event that starts in the past or cannot be stored', async () => {
+    const admin = await loginAs(app, Role.ADMIN);
+
+    await request(app.getHttpServer())
+      .post('/events')
+      .set(bearer(admin.token))
+      .send(eventBody({ startsAt: '2020-01-01T00:00:00.000Z' }))
+      .expect(400);
+    await request(app.getHttpServer())
+      .post('/events')
+      .set(bearer(admin.token))
+      .send(eventBody({ totalTickets: 2_147_483_648 }))
+      .expect(400);
+    await request(app.getHttpServer())
+      .post('/events')
+      .set(bearer(admin.token))
+      .send(eventBody({ ticketPrice: 100_000_000 }))
+      .expect(400);
+  });
+
+  it('rejects ticket counts the database cannot store', async () => {
+    const admin = await loginAs(app, Role.ADMIN);
+    const customer = await loginAs(app, Role.CUSTOMER);
+    const event = await createEvent(
+      app,
+      admin.token,
+      eventBody({ totalTickets: 2 }),
+    );
+    const reserved = await request(app.getHttpServer())
+      .post('/bookings')
+      .set(bearer(customer.token))
+      .send({ eventId: event.id, quantity: 1 })
+      .expect(201);
+    const prisma = app.get(PrismaService);
+
+    await expect(
+      prisma.$executeRaw`UPDATE events SET available_tickets = -1 WHERE id = ${event.id}`,
+    ).rejects.toThrow(/check constraint/i);
+    await expect(
+      prisma.$executeRaw`UPDATE events SET available_tickets = total_tickets + 1 WHERE id = ${event.id}`,
+    ).rejects.toThrow(/check constraint/i);
+    await expect(
+      prisma.$executeRaw`UPDATE bookings SET quantity = 0 WHERE id = ${reserved.body.id}`,
+    ).rejects.toThrow(/check constraint/i);
+  });
 });
 
 function bearer(token: string) {
@@ -924,5 +1060,5 @@ async function loginAs(app: INestApplication<App>, role: Role) {
     .post('/auth/login')
     .send({ email, password })
     .expect(200);
-  return { token: response.body.accessToken as string };
+  return { token: response.body.accessToken as string, email };
 }

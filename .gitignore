@@ -46,6 +46,9 @@ lerna-debug.log*
 .env.production.local
 .env.local
 
+# husky internals, recreated by npm ci
+.husky/_
+
 # temp directory
 .temp
 .tmp

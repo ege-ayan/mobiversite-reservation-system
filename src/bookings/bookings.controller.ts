@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   HttpCode,
   HttpStatus,
   Param,
@@ -10,10 +11,12 @@ import {
   Query,
 } from '@nestjs/common';
 import {
+  ApiBadRequestResponse,
   ApiBearerAuth,
   ApiConflictResponse,
   ApiCreatedResponse,
   ApiForbiddenResponse,
+  ApiHeader,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
@@ -25,8 +28,9 @@ import type { AuthenticatedUser } from '../auth/types/authenticated-user.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { Roles } from '../auth/decorators/roles.decorator.js';
 import { Role } from '../generated/prisma/client.js';
-import { ApiPageQueries, PageQuery } from '../pagination/page-query.js';
+import { ApiPageQueries, PageQuery } from '../common/pagination/page-query.js';
 import { BookingsService } from './bookings.service.js';
+import { parseIdempotencyKey } from './idempotency-key.js';
 import { BookingPage } from './dto/booking-page.js';
 import { BookingRequest } from './dto/booking-request.js';
 import { BookingResponse } from './dto/booking-response.js';
@@ -61,19 +65,46 @@ export class BookingsController {
     return this.bookingsService.listForUser(user.id, query);
   }
 
+  @Get(':id')
+  @ApiOperation({ summary: 'Get one reservation for the current customer' })
+  @ApiOkResponse({ type: BookingResponse })
+  @ApiNotFoundResponse({ description: 'Reservation not found' })
+  findOne(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<BookingResponse> {
+    return this.bookingsService.findForUser(user.id, id);
+  }
+
   @Post()
   @ApiOperation({ summary: 'Reserve tickets for an event' })
   @ApiCreatedResponse({
     description: 'Tickets held until payment or the hold expires',
     type: BookingResponse,
   })
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: false,
+    description:
+      'When the same customer sends this key again, the original reservation is returned. A different body with the same key is rejected.',
+    example: '8f14e45f-ceea-467a-9c0a-7a5c2c4d1e10',
+  })
   @ApiNotFoundResponse({ description: 'Event not found' })
-  @ApiConflictResponse({ description: 'Not enough tickets' })
+  @ApiBadRequestResponse({ description: 'Invalid idempotency key' })
+  @ApiConflictResponse({
+    description:
+      'Not enough tickets, or the idempotency key was reused for a different request',
+  })
   reserve(
     @CurrentUser() user: AuthenticatedUser,
     @Body() body: BookingRequest,
+    @Headers('idempotency-key') idempotencyKey?: string | string[],
   ): Promise<BookingResponse> {
-    return this.bookingsService.reserve(user.id, body);
+    return this.bookingsService.reserve(
+      user.id,
+      body,
+      parseIdempotencyKey(idempotencyKey),
+    );
   }
 
   @Post(':id/cancel')
