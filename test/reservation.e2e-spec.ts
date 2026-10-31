@@ -37,6 +37,9 @@ describe('Reservations (e2e)', () => {
 
   afterAll(async () => {
     const prisma = app.get(PrismaService);
+    await prisma.paymentAttempt.deleteMany({
+      where: { booking: { event: { title: { startsWith: 'test-event-' } } } },
+    });
     await prisma.booking.deleteMany({
       where: { event: { title: { startsWith: 'test-event-' } } },
     });
@@ -151,6 +154,8 @@ describe('Reservations (e2e)', () => {
     expect(payments.confirm).toHaveBeenCalledWith({
       bookingId: reserved.body.id,
       amount: '25.00',
+      idempotencyKey: reserved.body.id,
+      decline: undefined,
     });
 
     const cancelled = await request(app.getHttpServer())
@@ -759,6 +764,14 @@ describe('Reservations (e2e)', () => {
     expect(storedEvent.deletedAt).not.toBeNull();
     expect(storedEvent.availableTickets).toBe(4);
 
+    const audit = await request(app.getHttpServer())
+      .get(`/events/${event.id}/bookings`)
+      .set(bearer(admin.token))
+      .expect(200);
+    expect(audit.body.items.map((item: { id: string }) => item.id)).toEqual(
+      expect.arrayContaining([held.body.id, paid.body.id]),
+    );
+
     const catalog = await request(app.getHttpServer())
       .get('/events')
       .query({ limit: 100 })
@@ -810,10 +823,14 @@ describe('Reservations (e2e)', () => {
 
     const seen: string[] = [];
     let cursor: string | null = null;
+    const window = {
+      from: '2027-01-01T00:00:00.000Z',
+      to: '2027-01-03T00:00:00.000Z',
+    };
     for (let page = 0; page < 3; page += 1) {
       const response = await request(app.getHttpServer())
         .get('/events')
-        .query({ limit: 1, ...(cursor ? { cursor } : {}) })
+        .query({ limit: 1, ...window, ...(cursor ? { cursor } : {}) })
         .set(bearer(customer.token))
         .expect(200);
       expect(response.body.items).toHaveLength(1);
@@ -998,6 +1015,92 @@ describe('Reservations (e2e)', () => {
       prisma.$executeRaw`UPDATE bookings SET quantity = 0 WHERE id = ${reserved.body.id}`,
     ).rejects.toThrow(/check constraint/i);
   });
+
+  it('stops one customer from reserving every remaining ticket', async () => {
+    const admin = await loginAs(app, Role.ADMIN);
+    const first = await loginAs(app, Role.CUSTOMER);
+    const second = await loginAs(app, Role.CUSTOMER);
+    const event = await createEvent(
+      app,
+      admin.token,
+      eventBody({ totalTickets: 12 }),
+    );
+
+    await request(app.getHttpServer())
+      .post('/bookings')
+      .set(bearer(first.token))
+      .send({ eventId: event.id, quantity: 10 })
+      .expect(201);
+    const blocked = await request(app.getHttpServer())
+      .post('/bookings')
+      .set(bearer(first.token))
+      .send({ eventId: event.id, quantity: 1 })
+      .expect(409);
+    expect(blocked.body.message).toBe(
+      'You can reserve at most 10 tickets for an event',
+    );
+
+    const other = await request(app.getHttpServer())
+      .post('/bookings')
+      .set(bearer(second.token))
+      .send({ eventId: event.id, quantity: 1 })
+      .expect(201);
+    expect(other.body.event.availableTickets).toBe(1);
+  });
+
+  it('ends a hold when the event starts, even inside the 30 minute window', async () => {
+    const admin = await loginAs(app, Role.ADMIN);
+    const customer = await loginAs(app, Role.CUSTOMER);
+    const startsAt = new Date(Date.now() + 60_000).toISOString();
+    const event = await createEvent(
+      app,
+      admin.token,
+      eventBody({ startsAt, totalTickets: 2 }),
+    );
+
+    const reserved = await request(app.getHttpServer())
+      .post('/bookings')
+      .set(bearer(customer.token))
+      .send({ eventId: event.id, quantity: 1 })
+      .expect(201);
+
+    const expiresAt = new Date(reserved.body.expiresAt).getTime();
+    expect(expiresAt).toBeLessThanOrEqual(new Date(startsAt).getTime());
+    expect(expiresAt).toBeGreaterThan(Date.now());
+  });
+
+  it('hides events that have already started unless the caller asks for them', async () => {
+    const admin = await loginAs(app, Role.ADMIN);
+    const customer = await loginAs(app, Role.CUSTOMER);
+    const upcoming = await createEvent(app, admin.token, eventBody());
+    const past = await createEvent(app, admin.token, eventBody());
+    await app.get(PrismaService).event.update({
+      where: { id: past.id },
+      data: { startsAt: new Date('2020-01-01T00:00:00.000Z') },
+    });
+
+    const listed = await request(app.getHttpServer())
+      .get('/events')
+      .query({ limit: 100 })
+      .set(bearer(customer.token))
+      .expect(200);
+    const ids = listed.body.items.map((item: { id: string }) => item.id);
+    expect(ids).toContain(upcoming.id);
+    expect(ids).not.toContain(past.id);
+
+    const ranged = await request(app.getHttpServer())
+      .get('/events')
+      .query({
+        limit: 100,
+        from: '2019-01-01T00:00:00.000Z',
+        to: '2021-01-01T00:00:00.000Z',
+      })
+      .set(bearer(customer.token))
+      .expect(200);
+    expect(ranged.body.items.map((item: { id: string }) => item.id)).toContain(
+      past.id,
+    );
+  });
 });
 
 function bearer(token: string) {
@@ -1031,6 +1134,9 @@ async function createEvent(
 
 async function clearCatalog(app: INestApplication<App>) {
   const prisma = app.get(PrismaService);
+  await prisma.paymentAttempt.deleteMany({
+    where: { booking: { event: { title: { startsWith: 'test-event-' } } } },
+  });
   await prisma.booking.deleteMany({
     where: { event: { title: { startsWith: 'test-event-' } } },
   });

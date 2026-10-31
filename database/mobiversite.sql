@@ -31,8 +31,9 @@ CREATE TABLE `events` (
   `created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   `updated_at` datetime(3) NOT NULL,
   `deleted_at` datetime(3) DEFAULT NULL,
+  `sales_closed_at` datetime(3) DEFAULT NULL,
   PRIMARY KEY (`id`),
-  KEY `events_deleted_at_starts_at_id_idx` (`deleted_at`,`starts_at`,`id`),
+  KEY `events_deleted_at_sales_closed_at_starts_at_id_idx` (`deleted_at`,`sales_closed_at`,`starts_at`,`id`),
   CONSTRAINT `events_available_tickets_check` CHECK (((`available_tickets` >= 0) and (`available_tickets` <= `total_tickets`)))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -51,13 +52,29 @@ CREATE TABLE `bookings` (
   `request_hash` char(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `bookings_user_id_idempotency_key_key` (`user_id`,`idempotency_key`),
-  KEY `bookings_user_id_idx` (`user_id`),
-  KEY `bookings_event_id_idx` (`event_id`),
+  KEY `bookings_event_id_status_expires_at_idx` (`event_id`,`status`,`expires_at`),
+  KEY `bookings_event_id_created_at_id_idx` (`event_id`,`created_at`,`id`),
   KEY `bookings_status_expires_at_idx` (`status`,`expires_at`),
   KEY `bookings_user_id_created_at_idx` (`user_id`,`created_at`),
   CONSTRAINT `bookings_event_id_fkey` FOREIGN KEY (`event_id`) REFERENCES `events` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE,
   CONSTRAINT `bookings_user_id_fkey` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE,
   CONSTRAINT `bookings_quantity_check` CHECK ((`quantity` >= 1))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+DROP TABLE IF EXISTS `payment_attempts`;
+CREATE TABLE `payment_attempts` (
+  `id` char(36) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `booking_id` char(36) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `idempotency_key` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `amount` decimal(10,2) NOT NULL,
+  `state` enum('PENDING','DECLINED','APPLIED','REFUND_DUE','REFUNDED') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'PENDING',
+  `created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at` datetime(3) NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `payment_attempts_idempotency_key_key` (`idempotency_key`),
+  KEY `payment_attempts_booking_id_state_idx` (`booking_id`,`state`),
+  KEY `payment_attempts_state_updated_at_idx` (`state`,`updated_at`),
+  CONSTRAINT `payment_attempts_booking_id_fkey` FOREIGN KEY (`booking_id`) REFERENCES `bookings` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 DROP TABLE IF EXISTS `_prisma_migrations`;
@@ -78,6 +95,7 @@ INSERT INTO `_prisma_migrations` (`id`, `checksum`, `finished_at`, `migration_na
 INSERT INTO `_prisma_migrations` (`id`, `checksum`, `finished_at`, `migration_name`, `logs`, `rolled_back_at`, `started_at`, `applied_steps_count`) VALUES ('6f768386-fc34-4598-9fe2-2590778d2727', '86ea4f916637f1847efccd9a98fd0fc9dd4ed454a85bc87c1e5887e0cf256593', '2026-10-30 17:01:19.046', '20261030200119_soft_delete_events', NULL, NULL, '2026-10-30 17:01:19.021', '1');
 INSERT INTO `_prisma_migrations` (`id`, `checksum`, `finished_at`, `migration_name`, `logs`, `rolled_back_at`, `started_at`, `applied_steps_count`) VALUES ('f12281bf-1744-4439-a83f-b3e3a9aa1436', 'c59df3b4ef449d7c8568521f3517aa7046f41968c8cdab1baf6cba397847c073', '2026-10-30 18:22:21.360', '20261031001500_booking_idempotency_and_checks', NULL, NULL, '2026-10-30 18:22:21.028', '1');
 INSERT INTO `_prisma_migrations` (`id`, `checksum`, `finished_at`, `migration_name`, `logs`, `rolled_back_at`, `started_at`, `applied_steps_count`) VALUES ('36a1dbc8-8260-41af-ac2e-dbafdb52c0e7', 'a87549c4dd9f806ce51daf1c2a1de79d088b7552ec9ea300471919910680ccf1', '2026-10-31 06:25:32.731', '20261031120300_refunds_and_catalog_index', NULL, NULL, '2026-10-31 06:25:32.691', '1');
+INSERT INTO `_prisma_migrations` (`id`, `checksum`, `finished_at`, `migration_name`, `logs`, `rolled_back_at`, `started_at`, `applied_steps_count`) VALUES ('b7c1e2a4-6d58-4f0a-9c31-2e8a7b6d5c40', '00aad5b7a72d916f5f20fdee3d47a27fd869ffde43c8ca5e2598302d5b01a406', '2026-10-31 11:00:00.000', '20261031140000_sales_window_and_payment_attempts', NULL, NULL, '2026-10-31 11:00:00.000', '1');
 
 INSERT INTO `users` (`id`, `email`, `password_hash`, `role`, `created_at`, `updated_at`) VALUES (
   '00000000-0000-7000-8000-000000000001',

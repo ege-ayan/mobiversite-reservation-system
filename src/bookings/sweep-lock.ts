@@ -2,8 +2,10 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import mariadb from 'mariadb';
 import type { EnvironmentVariables } from '../config/env.validation.js';
+import { mysqlConnectionConfig } from '../prisma/mysql-config.js';
 
 export const SWEEP_LOCK_NAME = 'mobiversite_booking_expiry';
+export const PAYMENT_LOCK_NAME = 'mobiversite_payment_reconcile';
 
 @Injectable()
 export class SweepLock {
@@ -16,7 +18,7 @@ export class SweepLock {
     work: () => Promise<T>,
   ): Promise<T | null> {
     const connection = await mariadb.createConnection(
-      connectionOptions(this.config.get('DATABASE_URL', { infer: true })),
+      mysqlConnectionConfig(this.config.get('DATABASE_URL', { infer: true })),
     );
     try {
       const rows = await connection.query<Array<{ acquired: unknown }>>(
@@ -35,17 +37,6 @@ export class SweepLock {
       await connection.end();
     }
   }
-}
-
-function connectionOptions(databaseUrl: string) {
-  const url = new URL(databaseUrl);
-  return {
-    host: url.hostname,
-    port: url.port ? Number(url.port) : 3306,
-    user: decodeURIComponent(url.username),
-    password: decodeURIComponent(url.password),
-    database: url.pathname.replace(/^\//, ''),
-  };
 }
 
 function lockAcquired(value: unknown): boolean {

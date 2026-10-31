@@ -9,6 +9,7 @@ import {
   ParseUUIDPipe,
   Post,
   Query,
+  UseGuards,
 } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
@@ -23,13 +24,16 @@ import {
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import { SkipThrottle } from '@nestjs/throttler';
 import { HttpErrorResponse } from '../common/dto/error-response.js';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { Roles } from '../auth/decorators/roles.decorator.js';
 import { Role } from '../generated/prisma/client.js';
+import { mockDeclineRequested } from '../payment/payment.client.js';
 import { ApiPageQueries, PageQuery } from '../common/pagination/page-query.js';
 import { BookingsService } from './bookings.service.js';
+import { BookingThrottlerGuard } from './guards/booking-throttler.guard.js';
 import { parseIdempotencyKey } from './idempotency-key.js';
 import { BookingPage } from './dto/booking-page.js';
 import { BookingRequest } from './dto/booking-request.js';
@@ -49,6 +53,7 @@ const forbidden = {
 @ApiBearerAuth()
 @ApiUnauthorizedResponse({ description: 'Missing or invalid access token' })
 @ApiForbiddenResponse(forbidden)
+@SkipThrottle({ auth: true })
 @Roles(Role.CUSTOMER)
 @Controller('bookings')
 export class BookingsController {
@@ -77,6 +82,7 @@ export class BookingsController {
   }
 
   @Post()
+  @UseGuards(BookingThrottlerGuard)
   @ApiOperation({ summary: 'Reserve tickets for an event' })
   @ApiCreatedResponse({
     description: 'Tickets held until payment or the hold expires',
@@ -108,6 +114,7 @@ export class BookingsController {
   }
 
   @Post(':id/cancel')
+  @UseGuards(BookingThrottlerGuard)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Cancel a reservation and return its tickets' })
   @ApiOkResponse({ type: BookingResponse })
@@ -123,9 +130,16 @@ export class BookingsController {
   }
 
   @Post(':id/payment')
+  @UseGuards(BookingThrottlerGuard)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Confirm payment for a held reservation with the payment service',
+  })
+  @ApiHeader({
+    name: 'x-mock-payment',
+    required: false,
+    description:
+      'Send the value "decline" to make the mock payment service refuse this attempt. The hold stays, and a later attempt can still succeed.',
   })
   @ApiOkResponse({ type: BookingResponse })
   @ApiNotFoundResponse({ description: 'Reservation not found' })
@@ -133,7 +147,12 @@ export class BookingsController {
   pay(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
+    @Headers('x-mock-payment') mockPayment?: string | string[],
   ): Promise<BookingResponse> {
-    return this.bookingsService.pay(user.id, id);
+    return this.bookingsService.pay(
+      user.id,
+      id,
+      mockDeclineRequested(mockPayment) ? { decline: true } : undefined,
+    );
   }
 }

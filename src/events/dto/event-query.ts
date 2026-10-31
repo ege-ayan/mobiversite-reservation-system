@@ -5,7 +5,8 @@ import { PageQuery } from '../../common/pagination/page-query.js';
 export class EventQuery extends PageQuery {
   @ApiPropertyOptional({
     format: 'date-time',
-    description: 'Include events that start at or after this time',
+    description:
+      'Include events that start at or after this time. Defaults to the current time.',
   })
   @IsOptional()
   @IsDateString()

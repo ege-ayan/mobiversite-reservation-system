@@ -13,6 +13,14 @@ export const environmentSchema = z
     RESERVATION_HOLD_MS: z.coerce.number().int().positive().default(1_800_000),
     AUTH_RATE_LIMIT: z.coerce.number().int().positive().default(10),
     AUTH_RATE_TTL_MS: z.coerce.number().int().positive().default(60_000),
+    BOOKING_RATE_LIMIT: z.coerce.number().int().positive().default(30),
+    BOOKING_RATE_TTL_MS: z.coerce.number().int().positive().default(60_000),
+    MAX_ACTIVE_TICKETS_PER_EVENT: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(100)
+      .default(10),
     RATE_LIMIT_STORE: z.enum(['memory', 'redis']).default('memory'),
     REDIS_URL: z.preprocess(
       (value) => (value === '' ? undefined : value),

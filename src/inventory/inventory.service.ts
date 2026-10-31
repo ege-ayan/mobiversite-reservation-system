@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { BookingStatus, Prisma } from '../generated/prisma/client.js';
+import { WRITE_TRANSACTION } from '../prisma/transaction.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 
 export type InventoryTransaction = Prisma.TransactionClient;
@@ -17,7 +18,7 @@ export class InventoryService {
         throw new NotFoundException('Event not found');
       }
       return this.releaseExpiredHolds(tx, eventId, now);
-    });
+    }, WRITE_TRANSACTION);
   }
 
   async lockEvent(tx: InventoryTransaction, eventId: string): Promise<boolean> {
@@ -32,12 +33,21 @@ export class InventoryService {
     eventId: string,
     now: Date,
   ): Promise<number> {
+    const event = await tx.event.findUnique({
+      where: { id: eventId },
+      select: { startsAt: true },
+    });
+
+    const cutoff =
+      event && event.startsAt.getTime() <= now.getTime()
+        ? new Date('9999-12-31T00:00:00.000Z')
+        : now;
     const due = await tx.$queryRaw<HeldTicket[]>`
       SELECT id, quantity
       FROM bookings
       WHERE event_id = ${eventId}
         AND status = 'HELD'
-        AND expires_at <= ${now}
+        AND expires_at <= ${cutoff}
       FOR UPDATE
     `;
     if (due.length === 0) {
@@ -49,7 +59,6 @@ export class InventoryService {
       where: {
         id: { in: ids },
         status: BookingStatus.HELD,
-        expiresAt: { lte: now },
       },
       data: { status: BookingStatus.EXPIRED },
     });

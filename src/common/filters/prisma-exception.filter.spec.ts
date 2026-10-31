@@ -42,6 +42,24 @@ describe('PrismaExceptionFilter', () => {
     expect(status).toHaveBeenCalledWith(400);
   });
 
+  it('maps a lock timeout to an unavailable response', () => {
+    filter.catch(
+      new Prisma.PrismaClientUnknownRequestError(
+        'Lock wait timeout exceeded; try restarting transaction',
+        { clientVersion: 'test' },
+      ),
+      host,
+    );
+
+    expect(status).toHaveBeenCalledWith(503);
+    expect(json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: 'The database is busy, try again',
+        statusCode: 503,
+      }),
+    );
+  });
+
   it('hides an unexpected database error', () => {
     filter.catch(
       new Prisma.PrismaClientUnknownRequestError('connection reset', {

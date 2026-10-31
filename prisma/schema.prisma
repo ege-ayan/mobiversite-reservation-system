@@ -20,6 +20,14 @@ enum BookingStatus {
   REFUNDED
 }
 
+enum PaymentState {
+  PENDING
+  DECLINED
+  APPLIED
+  REFUND_DUE
+  REFUNDED
+}
+
 model User {
   id           String    @id @default(uuid(7)) @db.Char(36)
   email        String    @unique @db.VarChar(255)
@@ -44,9 +52,10 @@ model Event {
   createdAt        DateTime  @default(now()) @map("created_at")
   updatedAt        DateTime  @updatedAt @map("updated_at")
   deletedAt        DateTime? @map("deleted_at")
+  salesClosedAt    DateTime? @map("sales_closed_at")
   bookings         Booking[]
 
-  @@index([deletedAt, startsAt, id])
+  @@index([deletedAt, salesClosedAt, startsAt, id])
   @@map("events")
 }
 
@@ -60,14 +69,31 @@ model Booking {
   expiresAt      DateTime      @map("expires_at")
   idempotencyKey String?       @map("idempotency_key") @db.VarChar(255)
   requestHash    String?       @map("request_hash") @db.Char(64)
-  createdAt      DateTime      @default(now()) @map("created_at")
-  updatedAt      DateTime      @updatedAt @map("updated_at")
-  user           User          @relation(fields: [userId], references: [id])
-  event          Event         @relation(fields: [eventId], references: [id])
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+  user            User             @relation(fields: [userId], references: [id])
+  event           Event            @relation(fields: [eventId], references: [id])
+  paymentAttempts PaymentAttempt[]
 
   @@unique([userId, idempotencyKey])
   @@index([userId, createdAt])
-  @@index([eventId])
+  @@index([eventId, status, expiresAt])
+  @@index([eventId, createdAt, id])
   @@index([status, expiresAt])
   @@map("bookings")
+}
+
+model PaymentAttempt {
+  id             String       @id @default(uuid(7)) @db.Char(36)
+  bookingId      String       @map("booking_id") @db.Char(36)
+  idempotencyKey String       @unique @map("idempotency_key") @db.VarChar(255)
+  amount         Decimal      @db.Decimal(10, 2)
+  state          PaymentState @default(PENDING)
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+  booking        Booking      @relation(fields: [bookingId], references: [id])
+
+  @@index([bookingId, state])
+  @@index([state, updatedAt])
+  @@map("payment_attempts")
 }

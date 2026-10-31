@@ -43,11 +43,20 @@ describe('BookingsService', () => {
     findUniqueOrThrow: vi.fn(),
     create: vi.fn(),
     updateMany: vi.fn(),
+    aggregate: vi.fn(),
+  };
+  const paymentAttempts = {
+    create: vi.fn(),
+    findFirst: vi.fn(),
+    findMany: vi.fn(),
+    update: vi.fn(),
+    count: vi.fn(),
   };
   let transaction: ReturnType<typeof vi.fn>;
   const payments = {
     confirm: vi.fn(),
     refund: vi.fn(),
+    lookup: vi.fn(),
   };
   const sweepLock = {
     tryWithLock: vi.fn(async (_name: string, work: () => Promise<unknown>) =>
@@ -58,6 +67,7 @@ describe('BookingsService', () => {
   const tx = {
     event: events,
     booking: bookings,
+    paymentAttempt: paymentAttempts,
     $queryRaw: queryRaw,
   };
 
@@ -68,7 +78,20 @@ describe('BookingsService', () => {
     events.findUniqueOrThrow.mockResolvedValue(event);
     events.updateMany.mockResolvedValue({ count: 1 });
     bookings.findMany.mockResolvedValue([]);
+    bookings.findUnique.mockReset();
     bookings.findUnique.mockResolvedValue(null);
+    bookings.aggregate.mockResolvedValue({ _sum: { quantity: 0 } });
+    paymentAttempts.findFirst.mockResolvedValue(null);
+    paymentAttempts.findMany.mockResolvedValue([]);
+    paymentAttempts.count.mockResolvedValue(0);
+    paymentAttempts.update.mockResolvedValue({});
+    paymentAttempts.create.mockImplementation(async ({ data }) => ({
+      id: 'attempt-id',
+      state: 'PENDING',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      ...data,
+    }));
     bookings.updateMany.mockImplementation(async () => {
       const count = due.length;
       due = [];
@@ -105,6 +128,7 @@ describe('BookingsService', () => {
     const prisma = {
       event: events,
       booking: bookings,
+      paymentAttempt: paymentAttempts,
       $queryRaw: queryRaw,
       $transaction: transaction,
     };
@@ -116,7 +140,13 @@ describe('BookingsService', () => {
         { provide: PrismaService, useValue: prisma },
         { provide: PAYMENT_GATEWAY, useValue: payments },
         { provide: SweepLock, useValue: sweepLock },
-        { provide: ConfigService, useValue: { get: () => 1_800_000 } },
+        {
+          provide: ConfigService,
+          useValue: {
+            get: (key: string) =>
+              key === 'MAX_ACTIVE_TICKETS_PER_EVENT' ? 10 : 1_800_000,
+          },
+        },
       ],
     }).compile();
 
@@ -233,6 +263,8 @@ describe('BookingsService', () => {
     expect(payments.confirm).toHaveBeenCalledWith({
       bookingId: booking.id,
       amount: '25.00',
+      idempotencyKey: booking.id,
+      decline: undefined,
     });
     expect(bookings.updateMany).not.toHaveBeenCalled();
   });
@@ -280,6 +312,7 @@ describe('BookingsService', () => {
     expect(payments.refund).toHaveBeenCalledWith({
       bookingId: 'paid-id',
       amount: '50.00',
+      idempotencyKey: 'paid-id',
     });
     expect(bookings.updateMany).toHaveBeenCalledWith({
       where: { id: 'paid-id', status: BookingStatus.PAID },
@@ -311,6 +344,7 @@ describe('BookingsService', () => {
     expect(payments.refund).toHaveBeenCalledWith({
       bookingId: booking.id,
       amount: '50.00',
+      idempotencyKey: booking.id,
     });
     expect(events.update).toHaveBeenCalledWith({
       where: { id: event.id },
@@ -469,6 +503,7 @@ describe('BookingsService', () => {
     expect(payments.refund).toHaveBeenCalledWith({
       bookingId: 'booking-id',
       amount: '25.00',
+      idempotencyKey: 'booking-id',
     });
   });
 
@@ -484,18 +519,10 @@ describe('BookingsService', () => {
   });
 
   it('refuses payment when the event lock is lost', async () => {
-    let locks = 0;
     queryRaw.mockImplementation(
-      async (
-        query: TemplateStringsArray | { strings: string[] },
-        ...values: unknown[]
-      ) => {
+      async (query: TemplateStringsArray | { strings: string[] }) => {
         const text = sqlText(query);
         if (text.includes('FROM events')) {
-          locks += 1;
-          return locks < 2 ? [{ id: values[0] }] : [];
-        }
-        if (text.includes('FROM bookings')) {
           return [];
         }
         return [];
@@ -629,16 +656,12 @@ describe('BookingsService', () => {
     bookings.findUnique
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(stored);
-    transaction
-      .mockImplementationOnce(
-        async (run: (client: typeof tx) => Promise<unknown>) => run(tx),
-      )
-      .mockRejectedValueOnce(
-        new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
-          code: 'P2002',
-          clientVersion: '0.0.0',
-        }),
-      );
+    transaction.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+        code: 'P2002',
+        clientVersion: '0.0.0',
+      }),
+    );
 
     const result = await service.reserve(
       'user-id',
@@ -665,6 +688,44 @@ describe('BookingsService', () => {
           idempotencyKey: 'same-key',
           requestHash: requestFingerprint(event.id, 1),
         }),
+      }),
+    );
+  });
+
+  it('rejects a reservation that would pass the per-customer ticket cap', async () => {
+    bookings.aggregate.mockResolvedValue({ _sum: { quantity: 10 } });
+
+    await expect(
+      service.reserve('user-id', { eventId: event.id, quantity: 1 }),
+    ).rejects.toThrow('You can reserve at most 10 tickets for an event');
+    expect(bookings.create).not.toHaveBeenCalled();
+  });
+
+  it('applies a charge the provider already accepted', async () => {
+    const booking = { ...heldBooking(), event };
+    paymentAttempts.findMany.mockResolvedValue([
+      {
+        id: 'attempt-id',
+        bookingId: booking.id,
+        idempotencyKey: booking.id,
+        state: 'PENDING',
+        amount: new Prisma.Decimal('25.00'),
+        updatedAt: new Date(Date.now() - 60_000),
+        booking,
+      },
+    ]);
+    payments.lookup.mockResolvedValue('paid');
+    bookings.updateMany.mockResolvedValue({ count: 1 });
+    bookings.findUniqueOrThrow.mockResolvedValue({
+      ...booking,
+      status: BookingStatus.PAID,
+    });
+
+    await expect(service.reconcilePayments()).resolves.toBe(1);
+    expect(payments.lookup).toHaveBeenCalledWith(booking.id);
+    expect(bookings.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { status: BookingStatus.PAID },
       }),
     );
   });

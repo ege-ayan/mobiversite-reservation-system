@@ -55,6 +55,13 @@ function toErrorBody(
       statusCode: 404,
     };
   }
+  if (isDatabaseBusy(exception)) {
+    return {
+      message: 'The database is busy, try again',
+      error: 'Service Unavailable',
+      statusCode: 503,
+    };
+  }
   if (/check constraint|out of range|data truncated/i.test(exception.message)) {
     return {
       message: 'Request is outside the values the database can store',
@@ -67,4 +74,18 @@ function toErrorBody(
     error: 'Internal Server Error',
     statusCode: 500,
   };
+}
+
+function isDatabaseBusy(
+  exception:
+    | Prisma.PrismaClientKnownRequestError
+    | Prisma.PrismaClientUnknownRequestError,
+): boolean {
+  if (
+    exception instanceof Prisma.PrismaClientKnownRequestError &&
+    (exception.code === 'P2028' || exception.code === 'P2034')
+  ) {
+    return true;
+  }
+  return /deadlock|lock wait timeout/i.test(exception.message);
 }

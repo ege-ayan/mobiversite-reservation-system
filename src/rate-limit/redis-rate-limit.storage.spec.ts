@@ -10,6 +10,7 @@ function fakeRedis(result: unknown) {
     eval: evalCommand,
     quit,
     disconnect,
+    ping: vi.fn().mockResolvedValue('PONG'),
   };
   return { redis, evalCommand, quit, disconnect };
 }

@@ -11,7 +11,7 @@ services:
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@mobiversite.local}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change-me-admin}
       JWT_EXPIRES_IN_SECONDS: ${JWT_EXPIRES_IN_SECONDS:-86400}
-      PAYMENT_SERVICE_URL: http://payment:4000/payments
+      PAYMENT_SERVICE_URL: http://payment:4000
       RESERVATION_HOLD_MS: ${RESERVATION_HOLD_MS:-1800000}
       AUTH_RATE_LIMIT: ${AUTH_RATE_LIMIT:-10}
       AUTH_RATE_TTL_MS: ${AUTH_RATE_TTL_MS:-60000}
@@ -40,7 +40,7 @@ services:
   payment:
     image: node:26-alpine
     working_dir: /app
-    command: ['node', 'server.js']
+    command: ['node', 'server.mjs']
     volumes:
       - ./mock-payment:/app:ro
     ports:

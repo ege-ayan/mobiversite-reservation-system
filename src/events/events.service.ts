@@ -9,6 +9,7 @@ import { decodeCursor, slicePage } from '../common/pagination/cursor.js';
 import { DEFAULT_PAGE_LIMIT } from '../common/pagination/page-query.js';
 import { BookingStatus, Prisma } from '../generated/prisma/client.js';
 import { InventoryService } from '../inventory/inventory.service.js';
+import { WRITE_TRANSACTION } from '../prisma/transaction.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { EventPage } from './dto/event-page.js';
 import type { EventQuery } from './dto/event-query.js';
@@ -94,7 +95,7 @@ export class EventsService {
           },
         },
       });
-    });
+    }, WRITE_TRANSACTION);
     return toEventResponse(updated);
   }
 
@@ -123,7 +124,7 @@ export class EventsService {
         where: { id },
         data: { deletedAt: new Date() },
       });
-    });
+    }, WRITE_TRANSACTION);
   }
 
   private async requireVisibleEvent(id: string): Promise<void> {
@@ -136,30 +137,28 @@ export class EventsService {
       if (!event || event.deletedAt) {
         throw new NotFoundException('Event not found');
       }
-    });
+    }, WRITE_TRANSACTION);
   }
 
   private catalogFilter(query: EventQuery): Prisma.EventWhereInput {
     const title = query.q?.trim();
-    if (query.from && query.to && new Date(query.from) > new Date(query.to)) {
+    const from = query.from ? new Date(query.from) : new Date();
+    if (query.to && from.getTime() > new Date(query.to).getTime()) {
       throw new BadRequestException('from must be before to');
     }
     return {
+      salesClosedAt: null,
       ...(title ? { title: { contains: title } } : {}),
-      ...(query.from || query.to
-        ? {
-            startsAt: {
-              ...(query.from ? { gte: new Date(query.from) } : {}),
-              ...(query.to ? { lte: new Date(query.to) } : {}),
-            },
-          }
-        : {}),
+      startsAt: {
+        gte: from,
+        ...(query.to ? { lte: new Date(query.to) } : {}),
+      },
     };
   }
 
   private async findEvent(id: string): Promise<EventResponseSource> {
     const event = await this.prisma.event.findUnique({ where: { id } });
-    if (!event || event.deletedAt) {
+    if (!event || event.deletedAt || event.salesClosedAt) {
       throw new NotFoundException('Event not found');
     }
     return event;

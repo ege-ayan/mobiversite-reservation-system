@@ -8,7 +8,11 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { EnvironmentVariables } from '../config/env.validation.js';
-import { BookingStatus, Prisma } from '../generated/prisma/client.js';
+import {
+  BookingStatus,
+  PaymentState,
+  Prisma,
+} from '../generated/prisma/client.js';
 import { InventoryService } from '../inventory/inventory.service.js';
 import { decodeCursor, slicePage } from '../common/pagination/cursor.js';
 import {
@@ -19,13 +23,14 @@ import {
   PAYMENT_GATEWAY,
   type PaymentGateway,
 } from '../payment/payment.client.js';
+import { WRITE_TRANSACTION } from '../prisma/transaction.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import {
   toAdminBookingResponse,
   toBookingResponse,
   type BookingWithEvent,
 } from './booking-response.mapper.js';
-import { SWEEP_LOCK_NAME, SweepLock } from './sweep-lock.js';
+import { PAYMENT_LOCK_NAME, SWEEP_LOCK_NAME, SweepLock } from './sweep-lock.js';
 import type { AdminBookingPage } from './dto/admin-booking-page.js';
 import type { BookingPage } from './dto/booking-page.js';
 import type { BookingRequest } from './dto/booking-request.js';
@@ -38,6 +43,8 @@ const ACTIVE_STATUSES: BookingStatus[] = [
 ];
 
 const EXPIRY_EVENT_BATCH = 200;
+const STALE_ATTEMPT_MS = 15_000;
+const RECONCILE_BATCH = 50;
 
 type Tx = Prisma.TransactionClient;
 
@@ -48,10 +55,18 @@ type CancelOutcome =
   | { kind: 'cancelled'; booking: BookingWithEvent }
   | { kind: 'refund'; booking: BookingWithEvent };
 
+type PaymentAttemptRecord = {
+  id: string;
+  idempotencyKey: string;
+  state: PaymentState;
+  updatedAt: Date;
+};
+
 @Injectable()
 export class BookingsService {
   private readonly logger = new Logger(BookingsService.name);
   private readonly holdMs: number;
+  private readonly maxTicketsPerEvent: number;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -61,6 +76,9 @@ export class BookingsService {
     config: ConfigService<EnvironmentVariables, true>,
   ) {
     this.holdMs = config.get('RESERVATION_HOLD_MS', { infer: true });
+    this.maxTicketsPerEvent = config.get('MAX_ACTIVE_TICKETS_PER_EVENT', {
+      infer: true,
+    });
   }
 
   async listForUser(userId: string, query: PageQuery): Promise<BookingPage> {
@@ -78,7 +96,7 @@ export class BookingsService {
     const event = await this.prisma.event.findUnique({
       where: { id: eventId },
     });
-    if (!event || event.deletedAt) {
+    if (!event) {
       throw new NotFoundException('Event not found');
     }
     const page = await this.pageBookings({ eventId }, query, true);
@@ -105,19 +123,19 @@ export class BookingsService {
       return replay;
     }
 
-    await this.inventory.reclaim(request.eventId);
-
     const event = await this.prisma.event.findUnique({
       where: { id: request.eventId },
     });
-    if (!event || event.deletedAt) {
+    if (!event || event.deletedAt || event.salesClosedAt) {
       throw new NotFoundException('Event not found');
     }
     if (event.startsAt.getTime() <= Date.now()) {
       throw new BadRequestException('Event has already started');
     }
 
-    const expiresAt = new Date(Date.now() + this.holdMs);
+    const expiresAt = new Date(
+      Math.min(Date.now() + this.holdMs, event.startsAt.getTime()),
+    );
     try {
       const booking = await this.createHold(
         userId,
@@ -141,8 +159,9 @@ export class BookingsService {
 
   async cancel(userId: string, bookingId: string): Promise<BookingResponse> {
     const existing = await this.findOwnBooking(userId, bookingId);
-    const outcome = await this.prisma.$transaction((tx) =>
-      this.cancelLocked(tx, userId, bookingId, existing.eventId),
+    const outcome = await this.prisma.$transaction(
+      (tx) => this.cancelLocked(tx, userId, bookingId, existing.eventId),
+      WRITE_TRANSACTION,
     );
 
     if (outcome.kind === 'missing') {
@@ -161,7 +180,11 @@ export class BookingsService {
     return toBookingResponse(outcome.booking);
   }
 
-  async pay(userId: string, bookingId: string): Promise<BookingResponse> {
+  async pay(
+    userId: string,
+    bookingId: string,
+    options?: { decline?: boolean },
+  ): Promise<BookingResponse> {
     const existing = await this.findOwnBooking(userId, bookingId);
     if (existing.status === BookingStatus.PAID) {
       return toBookingResponse(existing);
@@ -170,63 +193,47 @@ export class BookingsService {
       throw new ConflictException('Reservation can no longer be paid');
     }
 
-    await this.inventory.reclaim(existing.eventId);
     const booking = await this.findOwnBooking(userId, bookingId);
-    if (booking.event.deletedAt || booking.status === BookingStatus.CANCELLED) {
+    if (
+      booking.event.deletedAt ||
+      booking.event.salesClosedAt ||
+      booking.status === BookingStatus.CANCELLED
+    ) {
       throw new ConflictException('Reservation can no longer be paid');
     }
     if (
       booking.status !== BookingStatus.HELD ||
-      booking.expiresAt.getTime() <= Date.now()
+      booking.expiresAt.getTime() <= Date.now() ||
+      booking.event.startsAt.getTime() <= Date.now()
     ) {
+      await this.inventory.reclaim(booking.eventId);
       throw new ConflictException('Reservation expired');
+    }
+
+    const started = await this.beginAttempt(booking);
+    if (!started.created) {
+      return this.resumeAttempt(booking, started.attempt);
     }
 
     const paid = await this.payments.confirm({
       bookingId: booking.id,
       amount: amountOf(booking),
+      idempotencyKey: started.attempt.idempotencyKey,
+      decline: options?.decline,
     });
     if (!paid) {
+      await this.prisma.paymentAttempt.update({
+        where: { id: started.attempt.id },
+        data: { state: PaymentState.DECLINED },
+      });
       throw new ConflictException('Payment was not confirmed');
     }
 
     try {
-      const confirmed = await this.prisma.$transaction(async (tx) => {
-        const locked = await this.inventory.lockEvent(tx, booking.eventId);
-        if (!locked) {
-          throw new NotFoundException('Event not found');
-        }
-        const freshEvent = await tx.event.findUnique({
-          where: { id: booking.eventId },
-        });
-        if (!freshEvent || freshEvent.deletedAt) {
-          throw new ConflictException('Reservation can no longer be paid');
-        }
-        await this.inventory.releaseExpiredHolds(
-          tx,
-          booking.eventId,
-          new Date(),
-        );
-        const updated = await tx.booking.updateMany({
-          where: {
-            id: bookingId,
-            userId,
-            status: BookingStatus.HELD,
-            expiresAt: { gt: new Date() },
-          },
-          data: { status: BookingStatus.PAID },
-        });
-        if (updated.count !== 1) {
-          throw new ConflictException('Reservation can no longer be paid');
-        }
-        return tx.booking.findUniqueOrThrow({
-          where: { id: bookingId },
-          include: { event: true },
-        });
-      });
+      const confirmed = await this.applyCharge(booking, started.attempt.id);
       return toBookingResponse(confirmed);
     } catch (error) {
-      await this.compensate(booking);
+      await this.compensate(booking, started.attempt);
       throw error;
     }
   }
@@ -237,12 +244,22 @@ export class BookingsService {
       if (!locked) {
         throw new NotFoundException('Event not found');
       }
+      const event = await tx.event.findUnique({ where: { id: eventId } });
+      if (!event || event.deletedAt) {
+        throw new NotFoundException('Event not found');
+      }
+      if (!event.salesClosedAt) {
+        await tx.event.update({
+          where: { id: eventId },
+          data: { salesClosedAt: new Date() },
+        });
+      }
       await this.inventory.releaseExpiredHolds(tx, eventId, new Date());
       await this.cancelHeld(tx, eventId);
       return tx.booking.findMany({
         where: { eventId, status: BookingStatus.PAID },
       });
-    });
+    }, WRITE_TRANSACTION);
 
     for (const booking of paid) {
       await this.refundPaid(booking);
@@ -268,15 +285,16 @@ export class BookingsService {
           });
         }
       }
-    });
+    }, WRITE_TRANSACTION);
   }
 
   async releaseExpiredHolds(now = new Date()): Promise<number> {
     const released = await this.sweepLock.tryWithLock(
       SWEEP_LOCK_NAME,
       async () => {
-        const eventIds = await this.prisma.$transaction((tx) =>
-          this.expiredEventIds(tx, now),
+        const eventIds = await this.prisma.$transaction(
+          (tx) => this.expiredEventIds(tx, now),
+          WRITE_TRANSACTION,
         );
         let count = 0;
         for (const eventId of eventIds) {
@@ -296,6 +314,37 @@ export class BookingsService {
       },
     );
     return released ?? 0;
+  }
+
+  async reconcilePayments(now = new Date()): Promise<number> {
+    const settled = await this.sweepLock.tryWithLock(
+      PAYMENT_LOCK_NAME,
+      async () => {
+        const attempts = await this.prisma.paymentAttempt.findMany({
+          where: {
+            state: { in: [PaymentState.PENDING, PaymentState.REFUND_DUE] },
+            updatedAt: { lt: new Date(now.getTime() - STALE_ATTEMPT_MS) },
+          },
+          include: { booking: { include: { event: true } } },
+          orderBy: { updatedAt: 'asc' },
+          take: RECONCILE_BATCH,
+        });
+        let count = 0;
+        for (const attempt of attempts) {
+          try {
+            await this.finishAttempt(attempt.booking, attempt);
+            count += 1;
+          } catch (error) {
+            this.logger.error(
+              `Failed to reconcile payment ${attempt.id}`,
+              error,
+            );
+          }
+        }
+        return count;
+      },
+    );
+    return settled ?? 0;
   }
 
   private async pageBookings(
@@ -342,10 +391,24 @@ export class BookingsService {
       const fresh = await tx.event.findUniqueOrThrow({
         where: { id: eventId },
       });
-      if (fresh.deletedAt) {
+      if (fresh.deletedAt || fresh.salesClosedAt) {
         throw new NotFoundException('Event not found');
       }
       await this.inventory.releaseExpiredHolds(tx, eventId, new Date());
+      const active = await tx.booking.aggregate({
+        where: {
+          userId,
+          eventId,
+          status: { in: ACTIVE_STATUSES },
+        },
+        _sum: { quantity: true },
+      });
+      const used = active._sum.quantity ?? 0;
+      if (used + request.quantity > this.maxTicketsPerEvent) {
+        throw new ConflictException(
+          `You can reserve at most ${this.maxTicketsPerEvent} tickets for an event`,
+        );
+      }
       const reserved = await tx.event.updateMany({
         where: {
           id: eventId,
@@ -376,7 +439,7 @@ export class BookingsService {
         },
         include: { event: true },
       });
-    });
+    }, WRITE_TRANSACTION);
   }
 
   private async replay(
@@ -486,7 +549,7 @@ export class BookingsService {
         where: { id: bookingId },
         include: { event: true },
       });
-    });
+    }, WRITE_TRANSACTION);
     if (!updated) {
       throw new ConflictException('Reservation can no longer be cancelled');
     }
@@ -512,35 +575,201 @@ export class BookingsService {
     });
   }
 
+  private async beginAttempt(booking: BookingWithEvent): Promise<{
+    created: boolean;
+    attempt: PaymentAttemptRecord;
+  }> {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM bookings WHERE id = ${booking.id} FOR UPDATE`;
+      const open = await tx.paymentAttempt.findFirst({
+        where: {
+          bookingId: booking.id,
+          state: { in: [PaymentState.PENDING, PaymentState.REFUND_DUE] },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (open) {
+        return { created: false, attempt: open };
+      }
+      const count = await tx.paymentAttempt.count({
+        where: { bookingId: booking.id },
+      });
+      const attempt = await tx.paymentAttempt.create({
+        data: {
+          bookingId: booking.id,
+          idempotencyKey:
+            count === 0 ? booking.id : `${booking.id}:${count + 1}`,
+          amount: amountOf(booking),
+          state: PaymentState.PENDING,
+        },
+      });
+      return { created: true, attempt };
+    }, WRITE_TRANSACTION);
+  }
+
+  private async resumeAttempt(
+    booking: BookingWithEvent,
+    attempt: PaymentAttemptRecord,
+  ): Promise<BookingResponse> {
+    const age = Date.now() - attempt.updatedAt.getTime();
+    if (attempt.state === PaymentState.PENDING && age < STALE_ATTEMPT_MS) {
+      throw new ConflictException('Payment is already in progress');
+    }
+    if (attempt.state === PaymentState.REFUND_DUE) {
+      await this.refundOutstanding(booking, attempt);
+      throw new ConflictException('Reservation can no longer be paid');
+    }
+    const finished = await this.finishAttempt(booking, attempt);
+    if (!finished) {
+      throw new ConflictException('Payment was not confirmed');
+    }
+    return finished;
+  }
+
+  private async finishAttempt(
+    booking: BookingWithEvent,
+    attempt: PaymentAttemptRecord,
+  ): Promise<BookingResponse | null> {
+    if (attempt.state === PaymentState.REFUND_DUE) {
+      await this.refundOutstanding(booking, attempt);
+      return null;
+    }
+    const outcome = await this.payments.lookup(attempt.idempotencyKey);
+    if (outcome === 'unknown' || outcome === 'declined') {
+      await this.prisma.paymentAttempt.update({
+        where: { id: attempt.id },
+        data: { state: PaymentState.DECLINED },
+      });
+      return null;
+    }
+    try {
+      return toBookingResponse(await this.applyCharge(booking, attempt.id));
+    } catch (error) {
+      await this.compensate(booking, attempt);
+      throw error;
+    }
+  }
+
+  private async applyCharge(booking: BookingWithEvent, attemptId: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const locked = await this.inventory.lockEvent(tx, booking.eventId);
+      if (!locked) {
+        throw new NotFoundException('Event not found');
+      }
+      const freshEvent = await tx.event.findUnique({
+        where: { id: booking.eventId },
+      });
+      if (!freshEvent || freshEvent.deletedAt || freshEvent.salesClosedAt) {
+        throw new ConflictException('Reservation can no longer be paid');
+      }
+      await this.inventory.releaseExpiredHolds(tx, booking.eventId, new Date());
+      const updated = await tx.booking.updateMany({
+        where: {
+          id: booking.id,
+          userId: booking.userId,
+          status: BookingStatus.HELD,
+          expiresAt: { gt: new Date() },
+        },
+        data: { status: BookingStatus.PAID },
+      });
+      if (updated.count !== 1) {
+        throw new ConflictException('Reservation can no longer be paid');
+      }
+      await tx.paymentAttempt.update({
+        where: { id: attemptId },
+        data: { state: PaymentState.APPLIED },
+      });
+      return tx.booking.findUniqueOrThrow({
+        where: { id: booking.id },
+        include: { event: true },
+      });
+    }, WRITE_TRANSACTION);
+  }
+
   private async refundPaid(booking: {
     id: string;
     ticketPrice: Prisma.Decimal;
     quantity: number;
   }): Promise<void> {
+    const attempt = await this.prisma.paymentAttempt.findFirst({
+      where: {
+        bookingId: booking.id,
+        state: {
+          in: [
+            PaymentState.APPLIED,
+            PaymentState.REFUND_DUE,
+            PaymentState.PENDING,
+          ],
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
     const refunded = await this.payments.refund({
       bookingId: booking.id,
       amount: amountOf(booking),
+      idempotencyKey: attempt?.idempotencyKey ?? booking.id,
     });
     if (!refunded) {
       throw new ConflictException('Refund was not confirmed');
     }
+    if (attempt) {
+      await this.prisma.paymentAttempt.update({
+        where: { id: attempt.id },
+        data: { state: PaymentState.REFUNDED },
+      });
+    }
   }
 
-  private async compensate(booking: BookingWithEvent): Promise<void> {
+  private async refundOutstanding(
+    booking: BookingWithEvent,
+    attempt: PaymentAttemptRecord,
+  ): Promise<void> {
+    const refunded = await this.payments.refund({
+      bookingId: booking.id,
+      amount: amountOf(booking),
+      idempotencyKey: attempt.idempotencyKey,
+    });
+    if (!refunded) {
+      throw new ConflictException('Refund was not confirmed');
+    }
+    await this.prisma.paymentAttempt.update({
+      where: { id: attempt.id },
+      data: { state: PaymentState.REFUNDED },
+    });
+  }
+
+  private async compensate(
+    booking: BookingWithEvent,
+    attempt: PaymentAttemptRecord,
+  ): Promise<void> {
     const current = await this.prisma.booking.findUnique({
       where: { id: booking.id },
     });
     if (current?.status === BookingStatus.PAID) {
+      await this.prisma.paymentAttempt.update({
+        where: { id: attempt.id },
+        data: { state: PaymentState.APPLIED },
+      });
       return;
     }
+    await this.prisma.paymentAttempt.update({
+      where: { id: attempt.id },
+      data: { state: PaymentState.REFUND_DUE },
+    });
     try {
       const refunded = await this.payments.refund({
         bookingId: booking.id,
         amount: amountOf(booking),
+        idempotencyKey: attempt.idempotencyKey,
       });
       if (!refunded) {
         this.logger.error(`Refund was not confirmed for booking ${booking.id}`);
+        return;
       }
+      await this.prisma.paymentAttempt.update({
+        where: { id: attempt.id },
+        data: { state: PaymentState.REFUNDED },
+      });
     } catch (error) {
       this.logger.error(`Refund failed for booking ${booking.id}`, error);
     }
@@ -549,9 +778,11 @@ export class BookingsService {
   private async expiredEventIds(tx: Tx, now: Date): Promise<string[]> {
     const rows = await tx.$queryRaw<Array<Record<string, string>>>(
       Prisma.sql`
-        SELECT DISTINCT event_id AS eventId
+        SELECT DISTINCT bookings.event_id AS eventId
         FROM bookings
-        WHERE status = 'HELD' AND expires_at <= ${now}
+        INNER JOIN events ON events.id = bookings.event_id
+        WHERE bookings.status = 'HELD'
+          AND (bookings.expires_at <= ${now} OR events.starts_at <= ${now})
         LIMIT ${Prisma.raw(String(EXPIRY_EVENT_BATCH))}
       `,
     );

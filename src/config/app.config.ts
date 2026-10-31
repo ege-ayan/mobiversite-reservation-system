@@ -1,7 +1,6 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import helmet from 'helmet';
 import { PrismaExceptionFilter } from '../common/filters/prisma-exception.filter.js';
-import { RequestLoggingInterceptor } from '../common/logging/request-logging.interceptor.js';
 import { setupOpenApi } from './openapi.config.js';
 
 export function configureApp(app: INestApplication) {
@@ -25,6 +24,5 @@ export function configureApp(app: INestApplication) {
     }),
   );
   app.useGlobalFilters(new PrismaExceptionFilter());
-  app.useGlobalInterceptors(new RequestLoggingInterceptor());
   setupOpenApi(app);
 }

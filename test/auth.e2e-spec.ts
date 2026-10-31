@@ -22,7 +22,14 @@ describe('Auth (e2e)', () => {
   });
 
   afterAll(async () => {
-    await app.get(PrismaService).user.deleteMany({
+    const prisma = app.get(PrismaService);
+    await prisma.paymentAttempt.deleteMany({
+      where: { booking: { user: { email: { endsWith: '@example.test' } } } },
+    });
+    await prisma.booking.deleteMany({
+      where: { user: { email: { endsWith: '@example.test' } } },
+    });
+    await prisma.user.deleteMany({
       where: { email: { endsWith: '@example.test' } },
     });
     await app.close();

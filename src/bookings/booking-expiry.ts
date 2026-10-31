@@ -7,7 +7,8 @@ export class BookingExpiry {
   constructor(private readonly bookings: BookingsService) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
-  releaseExpiredHolds(): Promise<number> {
-    return this.bookings.releaseExpiredHolds();
+  async sweep(): Promise<void> {
+    await this.bookings.releaseExpiredHolds();
+    await this.bookings.reconcilePayments();
   }
 }

@@ -51,6 +51,8 @@ export class EventsController {
   @ApiQuery({
     name: 'from',
     required: false,
+    description:
+      'Include events that start at or after this time. Defaults to now.',
     schema: { type: 'string', format: 'date-time' },
   })
   @ApiQuery({

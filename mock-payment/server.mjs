@@ -1,4 +1,4 @@
-const { createServer } = require('node:http');
+import { createServer } from 'node:http';
 
 const payments = new Map();
 
@@ -17,18 +17,33 @@ const server = createServer((request, response) => {
       }
     }
 
-    if (request.method === 'GET' && request.url === '/health') {
+    const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+
+    if (request.method === 'GET' && url.pathname === '/health') {
       write(response, 200, { status: 'ok' });
       return;
     }
 
-    if (request.method === 'POST' && request.url === '/payments') {
-      const key = header(request, 'idempotency-key') || body.bookingId;
-      if (key && payments.has(key)) {
-        write(response, 200, payments.get(key));
+    if (request.method === 'GET' && url.pathname.startsWith('/payments/')) {
+      const key = decodeURIComponent(url.pathname.slice('/payments/'.length));
+      const stored = key ? payments.get(key) : undefined;
+      if (!stored) {
+        write(response, 404, { paid: false });
         return;
       }
-      const declined = header(request, 'x-mock-payment') === 'decline';
+      write(response, 200, stored);
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/payments') {
+      const key = header(request, 'idempotency-key') || body.bookingId;
+      if (key && payments.has(key)) {
+        const stored = payments.get(key);
+        write(response, stored.paid ? 200 : 402, stored);
+        return;
+      }
+      const declined =
+        header(request, 'x-mock-payment') === 'decline' || body.decline === true;
       const result = { paid: !declined };
       if (key) {
         payments.set(key, result);
@@ -37,12 +52,12 @@ const server = createServer((request, response) => {
       return;
     }
 
-    if (request.method === 'POST' && request.url === '/refunds') {
+    if (request.method === 'POST' && url.pathname === '/refunds') {
       if (!body.bookingId) {
         write(response, 400, { refunded: false });
         return;
       }
-      payments.delete(body.bookingId);
+      forget(body.bookingId);
       write(response, 200, { refunded: true });
       return;
     }
@@ -52,6 +67,14 @@ const server = createServer((request, response) => {
 });
 
 server.listen(4000, '0.0.0.0');
+
+function forget(bookingId) {
+  for (const key of payments.keys()) {
+    if (key === bookingId || key.startsWith(`${bookingId}:`)) {
+      payments.delete(key);
+    }
+  }
+}
 
 function header(request, name) {
   const value = request.headers[name];

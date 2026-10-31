@@ -17,6 +17,7 @@ export interface RateLimitRedis {
   ): Promise<unknown>;
   quit(): Promise<unknown>;
   disconnect(): void;
+  ping(): Promise<string>;
   status: string;
 }
 
@@ -94,6 +95,13 @@ export class RedisRateLimitStorage
       blockDuration,
     );
     return toRecord(result);
+  }
+
+  async ping(): Promise<void> {
+    const reply = await this.redis.ping();
+    if (reply !== 'PONG') {
+      throw new Error('Redis did not respond');
+    }
   }
 
   async onApplicationShutdown(): Promise<void> {

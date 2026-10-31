@@ -18,6 +18,7 @@ import {
   ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import { SkipThrottle } from '@nestjs/throttler';
 import type { AuthenticatedUser } from './types/authenticated-user.js';
 import { CurrentUser } from './decorators/current-user.decorator.js';
 import { AuthService } from './auth.service.js';
@@ -42,6 +43,7 @@ const tooManyRequests = {
   },
 };
 
+@SkipThrottle({ booking: true })
 @ApiTags('Auth')
 @Controller('auth')
 export class AuthController {

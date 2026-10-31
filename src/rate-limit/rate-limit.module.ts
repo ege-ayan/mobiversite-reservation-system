@@ -35,8 +35,14 @@ export class RateLimitStorageModule {}
       ) => ({
         throttlers: [
           {
+            name: 'auth',
             ttl: config.get('AUTH_RATE_TTL_MS', { infer: true }),
             limit: config.get('AUTH_RATE_LIMIT', { infer: true }),
+          },
+          {
+            name: 'booking',
+            ttl: config.get('BOOKING_RATE_TTL_MS', { infer: true }),
+            limit: config.get('BOOKING_RATE_LIMIT', { infer: true }),
           },
         ],
         storage,

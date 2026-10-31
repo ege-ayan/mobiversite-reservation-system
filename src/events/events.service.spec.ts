@@ -143,6 +143,13 @@ describe('EventsService', () => {
     await expect(service.findOne('event-id')).rejects.toBeInstanceOf(
       NotFoundException,
     );
+
+    events.findUnique.mockResolvedValueOnce(
+      storedEvent({ salesClosedAt: new Date() }),
+    );
+    await expect(service.findOne('event-id')).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
   });
 
   it('replaces an event under a row lock and keeps the reserved ticket count', async () => {
@@ -226,6 +233,7 @@ describe('EventsService', () => {
       expect.objectContaining({
         where: {
           deletedAt: null,
+          salesClosedAt: null,
           title: { contains: 'live' },
           startsAt: {
             gte: new Date('2026-12-01T00:00:00.000Z'),

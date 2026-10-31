@@ -6,12 +6,18 @@ import { RedisRateLimitStorage } from './redis-rate-limit.storage.js';
 
 export const RATE_LIMIT_STORAGE = Symbol('RATE_LIMIT_STORAGE');
 
+export class MemoryRateLimitStorage extends ThrottlerStorageService {
+  ping(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
 export function createRateLimitStorage(options: {
   store: 'memory' | 'redis';
   redisUrl?: string;
 }): ThrottlerStorage {
   if (options.store === 'memory') {
-    return new ThrottlerStorageService();
+    return new MemoryRateLimitStorage();
   }
   if (!options.redisUrl) {
     throw new Error('REDIS_URL is required when RATE_LIMIT_STORE is redis');
