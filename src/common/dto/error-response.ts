@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class ValidationErrorResponse {
   @ApiProperty({
@@ -12,6 +12,9 @@ export class ValidationErrorResponse {
 
   @ApiProperty({ example: 400 })
   statusCode: number;
+
+  @ApiPropertyOptional({ example: 'VALIDATION_ERROR' })
+  code?: string;
 }
 
 export class HttpErrorResponse {
@@ -23,4 +26,7 @@ export class HttpErrorResponse {
 
   @ApiProperty({ example: 401 })
   statusCode: number;
+
+  @ApiPropertyOptional({ example: 'INVALID_CREDENTIALS' })
+  code?: string;
 }

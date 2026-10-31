@@ -4,11 +4,12 @@ import {
   conflict,
   notFound,
 } from '../common/errors/app.exception.js';
+import { ErrorCode } from '../common/errors/error-code.js';
 import { decodeCursor, slicePage } from '../common/pagination/cursor.js';
 import { DEFAULT_PAGE_LIMIT } from '../common/pagination/page-query.js';
 import { Prisma } from '../generated/prisma/client.js';
 import { InventoryService } from '../inventory/inventory.service.js';
-import { WRITE_TRANSACTION } from '../prisma/transaction.js';
+import { runWrite } from '../prisma/retry.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { catalogStatus } from './catalog-status.js';
 import type { AdminEventPage } from './dto/admin-event-page.js';
@@ -23,6 +24,7 @@ import {
   toEventResponse,
   type EventResponseSource,
 } from './event-response.mapper.js';
+import { titleFilter } from './title-filter.js';
 
 type TicketStats = {
   heldTickets: number;
@@ -117,7 +119,7 @@ export class EventsService {
   async findForAdmin(id: string): Promise<AdminEventResponse> {
     const event = await this.prisma.event.findUnique({ where: { id } });
     if (!event) {
-      throw notFound('Event not found', 'EVENT_NOT_FOUND');
+      throw notFound('Event not found', ErrorCode.EVENT_NOT_FOUND);
     }
     const stats = await this.ticketStats([event.id]);
     return this.toAdminEvent(event, stats.get(event.id));
@@ -127,21 +129,24 @@ export class EventsService {
     id: string,
     request: EventUpdateRequest,
   ): Promise<EventResponse> {
-    const updated = await this.prisma.$transaction(async (tx) => {
+    const updated = await runWrite(this.prisma, async (tx) => {
       const locked = await this.inventory.lockEvent(tx, id);
       if (!locked) {
-        throw notFound('Event not found', 'EVENT_NOT_FOUND');
+        throw notFound('Event not found', ErrorCode.EVENT_NOT_FOUND);
       }
       await this.inventory.releaseExpiredHolds(tx, id, new Date());
       const event = await tx.event.findUnique({ where: { id } });
       if (!event || event.deletedAt) {
-        throw notFound('Event not found', 'EVENT_NOT_FOUND');
+        throw notFound('Event not found', ErrorCode.EVENT_NOT_FOUND);
+      }
+      if (event.salesClosedAt) {
+        throw conflict('Event is being cancelled', ErrorCode.EVENT_CANCELLING);
       }
       const reserved = event.totalTickets - event.availableTickets;
       if (request.totalTickets < reserved) {
         throw conflict(
           'Ticket total is below existing reservations',
-          'CAPACITY_BELOW_RESERVED',
+          ErrorCode.CAPACITY_BELOW_RESERVED,
         );
       }
       return tx.event.update({
@@ -153,7 +158,7 @@ export class EventsService {
           },
         },
       });
-    }, WRITE_TRANSACTION);
+    });
     return toEventResponse(updated);
   }
 
@@ -173,7 +178,7 @@ export class EventsService {
   private catalogFilter(query: EventQuery): Prisma.EventWhereInput {
     const from = query.from ? new Date(query.from) : new Date();
     if (query.to && from.getTime() > new Date(query.to).getTime()) {
-      throw badRequest('from must be before to', 'INVALID_RANGE');
+      throw badRequest('from must be before to', ErrorCode.INVALID_RANGE);
     }
     return {
       salesClosedAt: null,
@@ -215,7 +220,7 @@ export class EventsService {
   private async findVisibleEvent(id: string): Promise<EventResponseSource> {
     const event = await this.prisma.event.findUnique({ where: { id } });
     if (!event || event.deletedAt || event.salesClosedAt) {
-      throw notFound('Event not found', 'EVENT_NOT_FOUND');
+      throw notFound('Event not found', ErrorCode.EVENT_NOT_FOUND);
     }
     return event;
   }
@@ -291,17 +296,6 @@ export class EventsService {
     }
     return stats;
   }
-}
-
-function titleFilter(q: string | undefined): Prisma.EventWhereInput {
-  const title = q?.trim();
-  if (!title) {
-    return {};
-  }
-  if (title.length >= 3) {
-    return { title: { search: title } };
-  }
-  return { title: { contains: title } };
 }
 
 function column(row: Record<string, unknown>, name: string) {

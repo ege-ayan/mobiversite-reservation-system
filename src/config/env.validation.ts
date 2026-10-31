@@ -1,5 +1,20 @@
 import { z } from 'zod';
 
+function envBoolean(defaultValue: boolean) {
+  return z.preprocess((value) => {
+    if (value === undefined || value === '') {
+      return defaultValue;
+    }
+    if (value === true || value === 'true' || value === '1') {
+      return true;
+    }
+    if (value === false || value === 'false' || value === '0') {
+      return false;
+    }
+    return value;
+  }, z.boolean());
+}
+
 export const environmentSchema = z
   .object({
     NODE_ENV: z
@@ -32,6 +47,13 @@ export const environmentSchema = z
       (value) => (value === '' ? undefined : value),
       z.url().optional(),
     ),
+    TRUST_PROXY: z.coerce.number().int().min(0).max(5).default(0),
+    DATABASE_POOL_SIZE: z.coerce.number().int().min(1).max(200).default(20),
+    RUN_JOBS: envBoolean(true),
+    SWAGGER_ENABLED: z.preprocess(
+      (value) => (value === undefined || value === '' ? undefined : value),
+      z.enum(['true', 'false']).optional(),
+    ),
   })
   .superRefine((value, context) => {
     if (value.NODE_ENV === 'production' && value.JWT_SECRET.length < 32) {
@@ -59,6 +81,13 @@ export const environmentSchema = z
         message: 'REDIS_URL is required when RATE_LIMIT_STORE is redis',
       });
     }
-  });
+  })
+  .transform((value) => ({
+    ...value,
+    SWAGGER_ENABLED:
+      value.SWAGGER_ENABLED === undefined
+        ? value.NODE_ENV !== 'production'
+        : value.SWAGGER_ENABLED === 'true',
+  }));
 
 export type EnvironmentVariables = z.infer<typeof environmentSchema>;

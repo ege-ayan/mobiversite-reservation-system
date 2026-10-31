@@ -11,7 +11,7 @@ import { InventoryService } from '../inventory/inventory.service.js';
 import { SweepLock } from '../common/locking/mysql-lock.js';
 import { EventCancellationService } from '../events/event-cancellation.service.js';
 import { PAYMENT_GATEWAY } from '../payment/payment.client.js';
-import { ChargeService } from '../payment/charge.service.js';
+import { ChargeService } from './charge.service.js';
 import { RefundService } from '../payment/refund.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { BookingQueryService } from './booking-query.service.js';
@@ -35,6 +35,7 @@ const event = {
 
 describe('BookingsService', () => {
   let service: BookingsService;
+  let cancellationService: EventCancellationService;
   let due: Array<{ id: string; quantity: number }>;
   const events = {
     findUnique: vi.fn(),
@@ -56,6 +57,7 @@ describe('BookingsService', () => {
     findFirst: vi.fn(),
     findMany: vi.fn(),
     update: vi.fn(),
+    updateMany: vi.fn().mockResolvedValue({ count: 0 }),
     count: vi.fn(),
   };
   let transaction: ReturnType<typeof vi.fn>;
@@ -169,6 +171,7 @@ describe('BookingsService', () => {
     }).compile();
 
     service = moduleRef.get(BookingsService);
+    cancellationService = moduleRef.get(EventCancellationService);
   });
 
   it('returns reclaimed tickets before deciding a reservation does not fit', async () => {
@@ -321,7 +324,7 @@ describe('BookingsService', () => {
     bookings.updateMany.mockResolvedValue({ count: 1 });
     payments.refund.mockResolvedValue(true);
 
-    await service.settleReservations(event.id);
+    await cancellationService.settleReservations(event.id);
 
     expect(bookings.updateMany).toHaveBeenCalledWith({
       where: { eventId: event.id, status: BookingStatus.HELD },
@@ -742,6 +745,40 @@ describe('BookingsService', () => {
     expect(bookings.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ status: BookingStatus.PAID }),
+      }),
+    );
+  });
+
+  it('finishes a paid booking whose refund was left in progress', async () => {
+    const booking = {
+      ...heldBooking(),
+      status: BookingStatus.PAID,
+      event,
+    };
+    paymentAttempts.findMany.mockResolvedValue([
+      {
+        id: 'attempt-id',
+        bookingId: booking.id,
+        idempotencyKey: booking.id,
+        state: 'REFUND_DUE',
+        amount: new Prisma.Decimal('25.00'),
+        updatedAt: new Date(Date.now() - 60_000),
+        booking,
+      },
+    ]);
+    payments.refund.mockResolvedValue(true);
+    bookings.updateMany.mockResolvedValue({ count: 1 });
+
+    await expect(service.reconcilePayments()).resolves.toBe(1);
+    expect(payments.lookup).not.toHaveBeenCalled();
+    expect(payments.refund).toHaveBeenCalledWith({
+      bookingId: booking.id,
+      amount: '25.00',
+      idempotencyKey: booking.id,
+    });
+    expect(bookings.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: BookingStatus.REFUNDED }),
       }),
     );
   });

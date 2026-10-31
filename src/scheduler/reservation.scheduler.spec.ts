@@ -1,6 +1,7 @@
-import { ReservationScheduler } from './reservation.scheduler.js';
+import { ConfigService } from '@nestjs/config';
 import { BookingsService } from '../bookings/bookings.service.js';
 import { EventCancellationService } from '../events/event-cancellation.service.js';
+import { ReservationScheduler } from './reservation.scheduler.js';
 
 describe('ReservationScheduler', () => {
   const bookings = {
@@ -13,6 +14,7 @@ describe('ReservationScheduler', () => {
   const scheduler = new ReservationScheduler(
     bookings as unknown as BookingsService,
     cancellation as unknown as EventCancellationService,
+    { get: () => true } as unknown as ConfigService,
   );
 
   beforeEach(() => {
@@ -39,5 +41,21 @@ describe('ReservationScheduler', () => {
     await expect(scheduler.reconcilePayments()).resolves.toBeUndefined();
 
     expect(bookings.reconcilePayments).toHaveBeenCalledOnce();
+  });
+
+  it('does nothing when background jobs are disabled', async () => {
+    const paused = new ReservationScheduler(
+      bookings as unknown as BookingsService,
+      cancellation as unknown as EventCancellationService,
+      { get: () => false } as unknown as ConfigService,
+    );
+
+    await paused.releaseExpiredHolds();
+    await paused.reconcilePayments();
+    await paused.finishCancellations();
+
+    expect(bookings.releaseExpiredHolds).not.toHaveBeenCalled();
+    expect(bookings.reconcilePayments).not.toHaveBeenCalled();
+    expect(cancellation.processPending).not.toHaveBeenCalled();
   });
 });

@@ -1,14 +1,15 @@
 import { type ArgumentsHost } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client.js';
-import { PrismaExceptionFilter } from './prisma-exception.filter.js';
+import { BadRequestException } from '@nestjs/common';
+import { AppExceptionFilter } from './prisma-exception.filter.js';
 
-describe('PrismaExceptionFilter', () => {
+describe('AppExceptionFilter', () => {
   const json = vi.fn();
   const status = vi.fn(() => ({ json }));
   const host = {
     switchToHttp: () => ({ getResponse: () => ({ status }) }),
   } as unknown as ArgumentsHost;
-  const filter = new PrismaExceptionFilter();
+  const filter = new AppExceptionFilter();
 
   beforeEach(() => {
     json.mockReset();
@@ -73,6 +74,29 @@ describe('PrismaExceptionFilter', () => {
       error: 'Internal Server Error',
       statusCode: 500,
       code: 'DATABASE_ERROR',
+    });
+  });
+
+  it('adds a code to a validation error', () => {
+    filter.catch(new BadRequestException(['email must be an email']), host);
+
+    expect(status).toHaveBeenCalledWith(400);
+    expect(json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        code: 'VALIDATION_ERROR',
+        message: ['email must be an email'],
+      }),
+    );
+  });
+
+  it('hides an unexpected error', () => {
+    filter.catch(new Error('secret query'), host);
+
+    expect(json).toHaveBeenCalledWith({
+      message: 'Internal server error',
+      error: 'Internal Server Error',
+      statusCode: 500,
+      code: 'INTERNAL_ERROR',
     });
   });
 });

@@ -2,36 +2,73 @@ import {
   type ArgumentsHost,
   Catch,
   type ExceptionFilter,
+  HttpException,
+  Logger,
 } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client.js';
+import { isDatabaseBusy } from '../../prisma/retry.js';
+import { ErrorCode } from '../errors/error-code.js';
 
 type ErrorBody = {
-  message: string;
+  message: string | string[];
   error: string;
   statusCode: number;
   code: string;
+  requestId?: string;
 };
 
-@Catch(
-  Prisma.PrismaClientKnownRequestError,
-  Prisma.PrismaClientUnknownRequestError,
-)
-export class PrismaExceptionFilter implements ExceptionFilter {
-  catch(
-    exception:
-      | Prisma.PrismaClientKnownRequestError
-      | Prisma.PrismaClientUnknownRequestError,
-    host: ArgumentsHost,
-  ): void {
-    const response = host.switchToHttp().getResponse<{
-      status: (code: number) => { json: (body: ErrorBody) => void };
-    }>();
+type HttpArgumentHost = {
+  getResponse?: () => {
+    status: (code: number) => { json: (body: ErrorBody) => void };
+  };
+  getRequest?: () => { id?: unknown };
+};
+
+@Catch()
+export class AppExceptionFilter implements ExceptionFilter {
+  private readonly logger = new Logger(AppExceptionFilter.name);
+
+  catch(exception: unknown, host: ArgumentsHost): void {
+    const http = host.switchToHttp() as HttpArgumentHost;
+    const response = http.getResponse?.();
+    if (!response) {
+      throw exception;
+    }
     const body = toErrorBody(exception);
+    const requestId = http.getRequest?.()?.id;
+    if (typeof requestId === 'string' && requestId.length > 0) {
+      body.requestId = requestId;
+    }
+    if (
+      process.env.NODE_ENV !== 'test' &&
+      !isPrismaError(exception) &&
+      !(exception instanceof HttpException)
+    ) {
+      this.logger.error(
+        'Unhandled exception',
+        exception instanceof Error ? exception.stack : undefined,
+      );
+    }
     response.status(body.statusCode).json(body);
   }
 }
 
-function toErrorBody(
+export function toErrorBody(exception: unknown): ErrorBody {
+  if (isPrismaError(exception)) {
+    return fromPrisma(exception);
+  }
+  if (exception instanceof HttpException) {
+    return fromHttp(exception);
+  }
+  return {
+    message: 'Internal server error',
+    error: 'Internal Server Error',
+    statusCode: 500,
+    code: ErrorCode.INTERNAL_ERROR,
+  };
+}
+
+function fromPrisma(
   exception:
     | Prisma.PrismaClientKnownRequestError
     | Prisma.PrismaClientUnknownRequestError,
@@ -44,7 +81,7 @@ function toErrorBody(
       message: 'Unique constraint failed',
       error: 'Conflict',
       statusCode: 409,
-      code: 'UNIQUE_CONFLICT',
+      code: ErrorCode.UNIQUE_CONFLICT,
     };
   }
   if (
@@ -55,7 +92,7 @@ function toErrorBody(
       message: 'Record not found',
       error: 'Not Found',
       statusCode: 404,
-      code: 'NOT_FOUND',
+      code: ErrorCode.NOT_FOUND,
     };
   }
   if (isDatabaseBusy(exception)) {
@@ -63,7 +100,7 @@ function toErrorBody(
       message: 'The database is busy, try again',
       error: 'Service Unavailable',
       statusCode: 503,
-      code: 'DATABASE_BUSY',
+      code: ErrorCode.DATABASE_BUSY,
     };
   }
   if (/check constraint|out of range|data truncated/i.test(exception.message)) {
@@ -71,27 +108,108 @@ function toErrorBody(
       message: 'Request is outside the values the database can store',
       error: 'Bad Request',
       statusCode: 400,
-      code: 'INVALID_DATA',
+      code: ErrorCode.INVALID_DATA,
     };
   }
   return {
     message: 'Unexpected database error',
     error: 'Internal Server Error',
     statusCode: 500,
-    code: 'DATABASE_ERROR',
+    code: ErrorCode.DATABASE_ERROR,
   };
 }
 
-function isDatabaseBusy(
-  exception:
-    | Prisma.PrismaClientKnownRequestError
-    | Prisma.PrismaClientUnknownRequestError,
-): boolean {
-  if (
-    exception instanceof Prisma.PrismaClientKnownRequestError &&
-    (exception.code === 'P2028' || exception.code === 'P2034')
-  ) {
-    return true;
+function fromHttp(exception: HttpException): ErrorBody {
+  const statusCode = exception.getStatus();
+  const raw = exception.getResponse();
+  if (typeof raw === 'string') {
+    return {
+      message: raw,
+      error: errorName(statusCode),
+      statusCode,
+      code: codeFor(statusCode, raw),
+    };
   }
-  return /deadlock|lock wait timeout/i.test(exception.message);
+  if (Array.isArray(raw)) {
+    const message = raw.map(String);
+    return {
+      message,
+      error: errorName(statusCode),
+      statusCode,
+      code: codeFor(statusCode, message),
+    };
+  }
+  const body = raw as {
+    message?: string | string[];
+    error?: string;
+    code?: string;
+  };
+  const message = body.message ?? exception.message;
+  return {
+    message,
+    error: body.error ?? errorName(statusCode),
+    statusCode,
+    code:
+      typeof body.code === 'string' ? body.code : codeFor(statusCode, message),
+  };
+}
+
+function codeFor(statusCode: number, message: string | string[]): ErrorCode {
+  if (statusCode === 400 && Array.isArray(message)) {
+    return ErrorCode.VALIDATION_ERROR;
+  }
+  switch (statusCode) {
+    case 400:
+      return ErrorCode.BAD_REQUEST;
+    case 401:
+      return ErrorCode.UNAUTHORIZED;
+    case 403:
+      return ErrorCode.FORBIDDEN;
+    case 404:
+      return ErrorCode.NOT_FOUND;
+    case 409:
+      return ErrorCode.CONFLICT;
+    case 429:
+      return ErrorCode.RATE_LIMITED;
+    case 502:
+      return ErrorCode.BAD_GATEWAY;
+    case 503:
+      return ErrorCode.SERVICE_UNAVAILABLE;
+    default:
+      return ErrorCode.HTTP_ERROR;
+  }
+}
+
+function errorName(statusCode: number): string {
+  switch (statusCode) {
+    case 400:
+      return 'Bad Request';
+    case 401:
+      return 'Unauthorized';
+    case 403:
+      return 'Forbidden';
+    case 404:
+      return 'Not Found';
+    case 409:
+      return 'Conflict';
+    case 429:
+      return 'Too Many Requests';
+    case 502:
+      return 'Bad Gateway';
+    case 503:
+      return 'Service Unavailable';
+    default:
+      return 'Error';
+  }
+}
+
+function isPrismaError(
+  exception: unknown,
+): exception is
+  | Prisma.PrismaClientKnownRequestError
+  | Prisma.PrismaClientUnknownRequestError {
+  return (
+    exception instanceof Prisma.PrismaClientKnownRequestError ||
+    exception instanceof Prisma.PrismaClientUnknownRequestError
+  );
 }

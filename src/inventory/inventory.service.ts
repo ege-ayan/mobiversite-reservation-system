@@ -1,7 +1,8 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { recordBookingTransitions } from '../bookings/booking-history.js';
+import { returnTickets } from '../bookings/booking-lifecycle.js';
 import { BookingStatus, Prisma } from '../generated/prisma/client.js';
-import { WRITE_TRANSACTION } from '../prisma/transaction.js';
+import { runWrite } from '../prisma/retry.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 
 export type InventoryTransaction = Prisma.TransactionClient;
@@ -13,13 +14,13 @@ export class InventoryService {
   constructor(private readonly prisma: PrismaService) {}
 
   async reclaim(eventId: string, now = new Date()): Promise<number> {
-    return this.prisma.$transaction(async (tx) => {
+    return runWrite(this.prisma, async (tx) => {
       const locked = await this.lockEvent(tx, eventId);
       if (!locked) {
         throw new NotFoundException('Event not found');
       }
       return this.releaseExpiredHolds(tx, eventId, now);
-    }, WRITE_TRANSACTION);
+    });
   }
 
   async lockEvent(tx: InventoryTransaction, eventId: string): Promise<boolean> {
@@ -77,10 +78,7 @@ export class InventoryService {
     );
 
     const quantity = due.reduce((sum, row) => sum + Number(row.quantity), 0);
-    await tx.event.update({
-      where: { id: eventId },
-      data: { availableTickets: { increment: quantity } },
-    });
+    await returnTickets(tx, eventId, quantity);
     return due.length;
   }
 }

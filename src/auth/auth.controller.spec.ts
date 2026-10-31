@@ -152,6 +152,7 @@ describe('AuthController rate limit', () => {
       message: 'Too many requests',
       error: 'Too Many Requests',
       statusCode: 429,
+      code: 'RATE_LIMITED',
     });
     expect(authService.login).toHaveBeenCalledTimes(2);
   });

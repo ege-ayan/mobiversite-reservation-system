@@ -6,11 +6,13 @@ import {
   notFound,
   badRequest,
 } from '../common/errors/app.exception.js';
+import { ErrorCode } from '../common/errors/error-code.js';
+import { runWrite } from '../prisma/retry.js';
 import { BookingStatus, Prisma } from '../generated/prisma/client.js';
 import { InventoryService } from '../inventory/inventory.service.js';
 import { RefundService } from '../payment/refund.service.js';
-import { WRITE_TRANSACTION } from '../prisma/transaction.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { applyPaidRefund, returnTickets } from './booking-lifecycle.js';
 import { recordBookingTransition } from './booking-history.js';
 import { BookingQueryService } from './booking-query.service.js';
 import {
@@ -67,10 +69,10 @@ export class ReservationService {
       where: { id: request.eventId },
     });
     if (!event || event.deletedAt || event.salesClosedAt) {
-      throw notFound('Event not found', 'EVENT_NOT_FOUND');
+      throw notFound('Event not found', ErrorCode.EVENT_NOT_FOUND);
     }
     if (event.startsAt.getTime() <= Date.now()) {
-      throw badRequest('Event has already started', 'EVENT_STARTED');
+      throw badRequest('Event has already started', ErrorCode.EVENT_STARTED);
     }
 
     const expiresAt = new Date(
@@ -99,22 +101,21 @@ export class ReservationService {
 
   async cancel(userId: string, bookingId: string): Promise<BookingResponse> {
     const existing = await this.queries.findOwned(userId, bookingId);
-    const outcome = await this.prisma.$transaction(
-      (tx) => this.cancelLocked(tx, userId, bookingId, existing.eventId),
-      WRITE_TRANSACTION,
+    const outcome = await runWrite(this.prisma, (tx) =>
+      this.cancelLocked(tx, userId, bookingId, existing.eventId),
     );
 
     if (outcome.kind === 'missing') {
-      throw notFound('Reservation not found', 'BOOKING_NOT_FOUND');
+      throw notFound('Reservation not found', ErrorCode.BOOKING_NOT_FOUND);
     }
     if (outcome.kind === 'closed') {
       throw conflict(
         'Reservation can no longer be cancelled',
-        'BOOKING_CLOSED',
+        ErrorCode.BOOKING_CLOSED,
       );
     }
     if (outcome.kind === 'started') {
-      throw conflict('Event has already started', 'EVENT_STARTED');
+      throw conflict('Event has already started', ErrorCode.EVENT_STARTED);
     }
     if (outcome.kind === 'refund') {
       await this.refunds.refundBooking(outcome.booking);
@@ -130,16 +131,16 @@ export class ReservationService {
     idempotencyKey: string | undefined,
     expiresAt: Date,
   ) {
-    return this.prisma.$transaction(async (tx) => {
+    return runWrite(this.prisma, async (tx) => {
       const locked = await this.inventory.lockEvent(tx, eventId);
       if (!locked) {
-        throw notFound('Event not found', 'EVENT_NOT_FOUND');
+        throw notFound('Event not found', ErrorCode.EVENT_NOT_FOUND);
       }
       const fresh = await tx.event.findUniqueOrThrow({
         where: { id: eventId },
       });
       if (fresh.deletedAt || fresh.salesClosedAt) {
-        throw notFound('Event not found', 'EVENT_NOT_FOUND');
+        throw notFound('Event not found', ErrorCode.EVENT_NOT_FOUND);
       }
       await this.inventory.releaseExpiredHolds(tx, eventId, new Date());
       const active = await tx.booking.aggregate({
@@ -154,7 +155,7 @@ export class ReservationService {
       if (used + request.quantity > this.maxTicketsPerEvent) {
         throw conflict(
           `You can reserve at most ${this.maxTicketsPerEvent} tickets for an event`,
-          'TICKET_LIMIT',
+          ErrorCode.TICKET_LIMIT,
         );
       }
       const reserved = await tx.event.updateMany({
@@ -165,7 +166,7 @@ export class ReservationService {
         data: { availableTickets: { decrement: request.quantity } },
       });
       if (reserved.count !== 1) {
-        throw conflict('Not enough tickets', 'SOLD_OUT');
+        throw conflict('Not enough tickets', ErrorCode.SOLD_OUT);
       }
 
       const created = await tx.booking.create({
@@ -194,7 +195,7 @@ export class ReservationService {
         reason: 'reserved',
       });
       return created;
-    }, WRITE_TRANSACTION);
+    });
   }
 
   private async replay(
@@ -216,7 +217,7 @@ export class ReservationService {
     if (existing.requestHash !== fingerprint) {
       throw conflict(
         'Idempotency key was reused for a different request',
-        'IDEMPOTENCY_CONFLICT',
+        ErrorCode.IDEMPOTENCY_CONFLICT,
       );
     }
     return toBookingResponse(existing);
@@ -230,7 +231,7 @@ export class ReservationService {
   ): Promise<CancelOutcome> {
     const locked = await this.inventory.lockEvent(tx, eventId);
     if (!locked) {
-      throw notFound('Event not found', 'EVENT_NOT_FOUND');
+      throw notFound('Event not found', ErrorCode.EVENT_NOT_FOUND);
     }
     await this.inventory.releaseExpiredHolds(tx, eventId, new Date());
     const current = await tx.booking.findFirst({
@@ -268,10 +269,7 @@ export class ReservationService {
       reason: 'cancelled',
     });
 
-    await tx.event.update({
-      where: { id: current.eventId },
-      data: { availableTickets: { increment: current.quantity } },
-    });
+    await returnTickets(tx, current.eventId, current.quantity);
     const cancelled = await tx.booking.findUniqueOrThrow({
       where: { id: bookingId },
       include: { event: true },
@@ -284,44 +282,33 @@ export class ReservationService {
     bookingId: string,
     booking: BookingWithEvent,
   ): Promise<BookingResponse> {
-    const updated = await this.prisma.$transaction(async (tx) => {
+    const updated = await runWrite(this.prisma, async (tx) => {
       const locked = await this.inventory.lockEvent(tx, booking.eventId);
       if (!locked) {
-        throw notFound('Event not found', 'EVENT_NOT_FOUND');
+        throw notFound('Event not found', ErrorCode.EVENT_NOT_FOUND);
       }
-      const result = await tx.booking.updateMany({
-        where: { id: bookingId, userId, status: BookingStatus.PAID },
-        data: { status: BookingStatus.REFUNDED, refundedAt: new Date() },
-      });
-      if (result.count !== 1) {
-        const current = await tx.booking.findFirst({
-          where: { id: bookingId, userId },
-          include: { event: true },
-        });
-        if (current?.status === BookingStatus.REFUNDED) {
-          return current;
-        }
+      const outcome = await applyPaidRefund(
+        tx,
+        {
+          id: bookingId,
+          userId,
+          eventId: booking.eventId,
+          quantity: booking.quantity,
+        },
+        'refunded',
+      );
+      if (outcome === 'closed') {
         return null;
       }
-      await recordBookingTransition(tx, {
-        bookingId,
-        fromStatus: BookingStatus.PAID,
-        toStatus: BookingStatus.REFUNDED,
-        reason: 'refunded',
-      });
-      await tx.event.update({
-        where: { id: booking.eventId },
-        data: { availableTickets: { increment: booking.quantity } },
-      });
       return tx.booking.findUniqueOrThrow({
         where: { id: bookingId },
         include: { event: true },
       });
-    }, WRITE_TRANSACTION);
+    });
     if (!updated) {
       throw conflict(
         'Reservation can no longer be cancelled',
-        'BOOKING_CLOSED',
+        ErrorCode.BOOKING_CLOSED,
       );
     }
     return toBookingResponse(updated);

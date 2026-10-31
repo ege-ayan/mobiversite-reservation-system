@@ -21,7 +21,7 @@ ENV NODE_ENV=production
 
 COPY package.json package-lock.json ./
 COPY scripts/prepare.mjs ./scripts/prepare.mjs
-RUN npm ci --omit=dev && npm install --no-save prisma@7.10.1
+RUN npm ci --omit=dev
 
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/prisma ./prisma

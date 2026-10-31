@@ -17,6 +17,7 @@ export class HttpThrottlerGuard extends ThrottlerGuard {
         message: 'Too many requests',
         error: 'Too Many Requests',
         statusCode: HttpStatus.TOO_MANY_REQUESTS,
+        code: 'RATE_LIMITED',
       },
       HttpStatus.TOO_MANY_REQUESTS,
     );

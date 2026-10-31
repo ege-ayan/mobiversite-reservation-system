@@ -4,6 +4,7 @@ import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import type { EnvironmentVariables } from '../../config/env.validation.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { JWT_ALGORITHM, JWT_AUDIENCE, JWT_ISSUER } from '../jwt-claims.js';
 import type { AccessTokenPayload } from '../types/access-token-payload.js';
 import type { AuthenticatedUser } from '../types/authenticated-user.js';
 
@@ -17,6 +18,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
       secretOrKey: config.get('JWT_SECRET', { infer: true }),
+      algorithms: [JWT_ALGORITHM],
+      issuer: JWT_ISSUER,
+      audience: JWT_AUDIENCE,
     });
   }
 

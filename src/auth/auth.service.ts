@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import bcrypt from 'bcryptjs';
 import { conflict, unauthorized } from '../common/errors/app.exception.js';
+import { ErrorCode } from '../common/errors/error-code.js';
 import type { EnvironmentVariables } from '../config/env.validation.js';
 import { Prisma, type Role } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -58,7 +59,7 @@ export class AuthService {
     const email = normalizeEmail(request.email);
     const existing = await this.prisma.user.findUnique({ where: { email } });
     if (existing) {
-      throw conflict('Email already registered', 'EMAIL_TAKEN');
+      throw conflict('Email already registered', ErrorCode.EMAIL_TAKEN);
     }
 
     try {
@@ -74,7 +75,7 @@ export class AuthService {
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === 'P2002'
       ) {
-        throw conflict('Email already registered', 'EMAIL_TAKEN');
+        throw conflict('Email already registered', ErrorCode.EMAIL_TAKEN);
       }
       throw error;
     }
@@ -91,7 +92,10 @@ export class AuthService {
     );
 
     if (!user || !passwordMatches) {
-      throw unauthorized('Invalid email or password', 'INVALID_CREDENTIALS');
+      throw unauthorized(
+        'Invalid email or password',
+        ErrorCode.INVALID_CREDENTIALS,
+      );
     }
 
     return this.issueSession(user);
@@ -102,12 +106,18 @@ export class AuthService {
       where: { tokenHash: hashRefreshToken(refreshToken) },
       include: { user: true },
     });
-    if (
-      !stored ||
-      stored.revokedAt ||
-      stored.expiresAt.getTime() <= Date.now()
-    ) {
-      throw unauthorized('Invalid refresh token', 'INVALID_REFRESH_TOKEN');
+    if (!stored || stored.expiresAt.getTime() <= Date.now()) {
+      throw unauthorized(
+        'Invalid refresh token',
+        ErrorCode.INVALID_REFRESH_TOKEN,
+      );
+    }
+    if (stored.revokedAt) {
+      await this.revokeRefreshFamily(stored.userId);
+      throw unauthorized(
+        'Invalid refresh token',
+        ErrorCode.INVALID_REFRESH_TOKEN,
+      );
     }
 
     const rotated = await this.prisma.refreshToken.updateMany({
@@ -119,7 +129,11 @@ export class AuthService {
       data: { revokedAt: new Date() },
     });
     if (rotated.count !== 1) {
-      throw unauthorized('Invalid refresh token', 'INVALID_REFRESH_TOKEN');
+      await this.revokeRefreshFamily(stored.userId);
+      throw unauthorized(
+        'Invalid refresh token',
+        ErrorCode.INVALID_REFRESH_TOKEN,
+      );
     }
     return this.issueSession(stored.user);
   }
@@ -127,6 +141,13 @@ export class AuthService {
   async logout(refreshToken: string): Promise<void> {
     await this.prisma.refreshToken.updateMany({
       where: { tokenHash: hashRefreshToken(refreshToken), revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+  }
+
+  private async revokeRefreshFamily(userId: string): Promise<void> {
+    await this.prisma.refreshToken.updateMany({
+      where: { userId, revokedAt: null },
       data: { revokedAt: new Date() },
     });
   }

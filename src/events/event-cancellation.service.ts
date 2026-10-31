@@ -1,14 +1,24 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { conflict, notFound } from '../common/errors/app.exception.js';
-import { BookingStatus, Prisma } from '../generated/prisma/client.js';
 import { recordBookingTransitions } from '../bookings/booking-history.js';
+import {
+  applyPaidRefund,
+  returnTickets,
+} from '../bookings/booking-lifecycle.js';
+import { conflict, notFound } from '../common/errors/app.exception.js';
+import { ErrorCode } from '../common/errors/error-code.js';
+import {
+  CANCELLATION_LOCK_NAME,
+  SweepLock,
+} from '../common/locking/mysql-lock.js';
+import { BookingStatus, Prisma } from '../generated/prisma/client.js';
 import { InventoryService } from '../inventory/inventory.service.js';
 import { RefundService } from '../payment/refund.service.js';
-import { WRITE_TRANSACTION } from '../prisma/transaction.js';
+import { runWrite } from '../prisma/retry.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { EventCancellationResponse } from './dto/event-cancellation-response.js';
 
 const CANCELLATION_BATCH = 50;
+const CANCELLATION_LOCK_WAIT_SECONDS = 30;
 
 type Tx = Prisma.TransactionClient;
 
@@ -20,17 +30,18 @@ export class EventCancellationService {
     private readonly prisma: PrismaService,
     private readonly inventory: InventoryService,
     private readonly refunds: RefundService,
+    private readonly sweepLock: SweepLock,
   ) {}
 
   async request(eventId: string): Promise<EventCancellationResponse> {
-    await this.prisma.$transaction(async (tx) => {
+    await runWrite(this.prisma, async (tx) => {
       const locked = await this.inventory.lockEvent(tx, eventId);
       if (!locked) {
-        throw notFound('Event not found', 'EVENT_NOT_FOUND');
+        throw notFound('Event not found', ErrorCode.EVENT_NOT_FOUND);
       }
       const event = await tx.event.findUnique({ where: { id: eventId } });
       if (!event || event.deletedAt) {
-        throw notFound('Event not found', 'EVENT_NOT_FOUND');
+        throw notFound('Event not found', ErrorCode.EVENT_NOT_FOUND);
       }
       if (!event.salesClosedAt) {
         await tx.event.update({
@@ -38,32 +49,51 @@ export class EventCancellationService {
           data: { salesClosedAt: new Date() },
         });
       }
-    }, WRITE_TRANSACTION);
+    });
     return { id: eventId, status: 'CANCELLING' };
   }
 
   async processPending(): Promise<number> {
-    const events = await this.prisma.event.findMany({
-      where: { salesClosedAt: { not: null }, deletedAt: null },
-      select: { id: true },
-      take: CANCELLATION_BATCH,
-    });
-    let count = 0;
-    for (const event of events) {
-      try {
-        await this.processOne(event.id);
-        count += 1;
-      } catch (error) {
-        this.logger.error(
-          `Failed to finish cancellation for event ${event.id}`,
-          error instanceof Error ? error.stack : undefined,
-        );
-      }
-    }
-    return count;
+    const processed = await this.sweepLock.tryWithLock(
+      CANCELLATION_LOCK_NAME,
+      async () => {
+        const events = await this.prisma.event.findMany({
+          where: { salesClosedAt: { not: null }, deletedAt: null },
+          select: { id: true },
+          take: CANCELLATION_BATCH,
+        });
+        let count = 0;
+        for (const event of events) {
+          try {
+            await this.runOne(event.id);
+            count += 1;
+          } catch (error) {
+            this.logger.error(
+              `Failed to finish cancellation for event ${event.id}`,
+              error instanceof Error ? error.stack : undefined,
+            );
+          }
+        }
+        return count;
+      },
+    );
+    return processed ?? 0;
   }
 
   async processOne(eventId: string): Promise<void> {
+    const ran = await this.sweepLock.tryWithLock(
+      CANCELLATION_LOCK_NAME,
+      () => this.runOne(eventId),
+      CANCELLATION_LOCK_WAIT_SECONDS,
+    );
+    if (ran === null) {
+      this.logger.warn(
+        `Cancellation for event ${eventId} did not start; another worker still holds the lock`,
+      );
+    }
+  }
+
+  private async runOne(eventId: string): Promise<void> {
     const event = await this.prisma.event.findUnique({
       where: { id: eventId },
     });
@@ -71,7 +101,7 @@ export class EventCancellationService {
       return;
     }
     await this.settleReservations(eventId);
-    await this.prisma.$transaction(async (tx) => {
+    await runWrite(this.prisma, async (tx) => {
       const locked = await this.inventory.lockEvent(tx, eventId);
       if (!locked) {
         return;
@@ -89,25 +119,25 @@ export class EventCancellationService {
       if (open > 0) {
         throw conflict(
           'Event still has open reservations',
-          'EVENT_HAS_OPEN_BOOKINGS',
+          ErrorCode.EVENT_HAS_OPEN_BOOKINGS,
         );
       }
       await tx.event.update({
         where: { id: eventId },
         data: { deletedAt: new Date() },
       });
-    }, WRITE_TRANSACTION);
+    });
   }
 
   async settleReservations(eventId: string): Promise<void> {
-    const paid = await this.prisma.$transaction(async (tx) => {
+    const paid = await runWrite(this.prisma, async (tx) => {
       const locked = await this.inventory.lockEvent(tx, eventId);
       if (!locked) {
-        throw notFound('Event not found', 'EVENT_NOT_FOUND');
+        throw notFound('Event not found', ErrorCode.EVENT_NOT_FOUND);
       }
       const event = await tx.event.findUnique({ where: { id: eventId } });
       if (!event || event.deletedAt) {
-        throw notFound('Event not found', 'EVENT_NOT_FOUND');
+        throw notFound('Event not found', ErrorCode.EVENT_NOT_FOUND);
       }
       if (!event.salesClosedAt) {
         await tx.event.update({
@@ -120,7 +150,7 @@ export class EventCancellationService {
       return tx.booking.findMany({
         where: { eventId, status: BookingStatus.PAID },
       });
-    }, WRITE_TRANSACTION);
+    });
 
     for (const booking of paid) {
       await this.refunds.refundBooking(booking);
@@ -129,32 +159,23 @@ export class EventCancellationService {
       return;
     }
 
-    await this.prisma.$transaction(async (tx) => {
+    await runWrite(this.prisma, async (tx) => {
       const locked = await this.inventory.lockEvent(tx, eventId);
       if (!locked) {
-        throw notFound('Event not found', 'EVENT_NOT_FOUND');
+        throw notFound('Event not found', ErrorCode.EVENT_NOT_FOUND);
       }
       for (const booking of paid) {
-        const updated = await tx.booking.updateMany({
-          where: { id: booking.id, status: BookingStatus.PAID },
-          data: { status: BookingStatus.REFUNDED, refundedAt: new Date() },
-        });
-        if (updated.count === 1) {
-          await recordBookingTransitions(tx, [
-            {
-              bookingId: booking.id,
-              fromStatus: BookingStatus.PAID,
-              toStatus: BookingStatus.REFUNDED,
-              reason: 'event_refunded',
-            },
-          ]);
-          await tx.event.update({
-            where: { id: eventId },
-            data: { availableTickets: { increment: booking.quantity } },
-          });
-        }
+        await applyPaidRefund(
+          tx,
+          {
+            id: booking.id,
+            eventId,
+            quantity: booking.quantity,
+          },
+          'event_refunded',
+        );
       }
-    }, WRITE_TRANSACTION);
+    });
   }
 
   private async cancelHeld(tx: Tx, eventId: string): Promise<void> {
@@ -179,9 +200,6 @@ export class EventCancellationService {
       })),
     );
     const quantity = held.reduce((sum, row) => sum + row.quantity, 0);
-    await tx.event.update({
-      where: { id: eventId },
-      data: { availableTickets: { increment: quantity } },
-    });
+    await returnTickets(tx, eventId, quantity);
   }
 }

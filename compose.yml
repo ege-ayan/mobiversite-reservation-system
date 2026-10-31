@@ -32,6 +32,10 @@ services:
       AUTH_RATE_TTL_MS: ${AUTH_RATE_TTL_MS:-60000}
       RATE_LIMIT_STORE: redis
       REDIS_URL: redis://redis:6379
+      TRUST_PROXY: 0
+      DATABASE_POOL_SIZE: 20
+      RUN_JOBS: "true"
+      SWAGGER_ENABLED: "true"
     depends_on:
       migrate:
         condition: service_completed_successfully

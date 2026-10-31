@@ -178,6 +178,19 @@ describe('EventsService', () => {
     expect(result.availableTickets).toBe(4);
   });
 
+  it('rejects an update while sales are closed', async () => {
+    const current = storedEvent({ salesClosedAt: new Date() });
+    const tx = lockedEventTx(current);
+    transaction.mockImplementation(
+      async (run: (client: typeof tx) => unknown) => run(tx),
+    );
+
+    await expect(service.update('event-id', request)).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+    expect(tx.event.update).not.toHaveBeenCalled();
+  });
+
   it('pages the catalog from a cursor', async () => {
     const first = storedEvent({
       id: '01932a5e-8c3a-7c2e-9b1a-6d4f2e8c0a11',
@@ -228,7 +241,7 @@ describe('EventsService', () => {
         where: {
           deletedAt: null,
           salesClosedAt: null,
-          title: { search: 'live' },
+          title: { search: '"live"' },
           startsAt: {
             gte: new Date('2026-12-01T00:00:00.000Z'),
             lte: new Date('2026-12-31T00:00:00.000Z'),

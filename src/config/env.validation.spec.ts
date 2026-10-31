@@ -27,6 +27,10 @@ describe('environmentSchema', () => {
     expect(parsed.PAYMENT_WEBHOOK_SECRET).toBe('dev-webhook-secret');
     expect(parsed.RATE_LIMIT_STORE).toBe('memory');
     expect(parsed.REDIS_URL).toBeUndefined();
+    expect(parsed.TRUST_PROXY).toBe(0);
+    expect(parsed.DATABASE_POOL_SIZE).toBe(20);
+    expect(parsed.RUN_JOBS).toBe(true);
+    expect(parsed.SWAGGER_ENABLED).toBe(true);
   });
 
   it('ignores an empty Redis URL in memory mode', () => {
@@ -55,6 +59,29 @@ describe('environmentSchema', () => {
     }
     expect(present.RATE_LIMIT_STORE).toBe('redis');
     expect(present.REDIS_URL).toBe('redis://localhost:6379');
+  });
+
+  it('turns swagger off in production unless it is enabled', () => {
+    const parsed = environmentSchema.parse({
+      ...valid,
+      NODE_ENV: 'production',
+      JWT_SECRET: 'x'.repeat(32),
+      PAYMENT_WEBHOOK_SECRET: 'y'.repeat(32),
+    });
+    const enabled = environmentSchema.parse({
+      ...valid,
+      NODE_ENV: 'production',
+      JWT_SECRET: 'x'.repeat(32),
+      PAYMENT_WEBHOOK_SECRET: 'y'.repeat(32),
+      SWAGGER_ENABLED: 'true',
+      TRUST_PROXY: '1',
+      RUN_JOBS: 'false',
+    });
+
+    expect(parsed.SWAGGER_ENABLED).toBe(false);
+    expect(enabled.SWAGGER_ENABLED).toBe(true);
+    expect(enabled.TRUST_PROXY).toBe(1);
+    expect(enabled.RUN_JOBS).toBe(false);
   });
 
   it('rejects a short JWT secret in production', () => {

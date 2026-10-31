@@ -2,7 +2,7 @@ import type { PoolConfig } from 'mariadb';
 
 export function mysqlConnectionConfig(
   databaseUrl: string,
-  options?: { pooled?: boolean },
+  options?: { pooled?: boolean; connectionLimit?: number },
 ): PoolConfig {
   const url = new URL(databaseUrl);
   const config: PoolConfig = {
@@ -14,7 +14,7 @@ export function mysqlConnectionConfig(
     connectTimeout: 5_000,
   };
   if (options?.pooled) {
-    config.connectionLimit = 20;
+    config.connectionLimit = options.connectionLimit ?? 20;
     config.acquireTimeout = 10_000;
   }
   const ssl = url.searchParams.get('ssl') ?? url.searchParams.get('sslmode');

@@ -11,10 +11,12 @@ export class PrismaService
   implements OnModuleInit, OnModuleDestroy
 {
   constructor(config: ConfigService<EnvironmentVariables, true>) {
+    const poolSize = config.get('DATABASE_POOL_SIZE', { infer: true });
     super({
       adapter: new PrismaMariaDb(
         mysqlConnectionConfig(config.get('DATABASE_URL', { infer: true }), {
           pooled: true,
+          connectionLimit: typeof poolSize === 'number' ? poolSize : undefined,
         }),
       ),
     });

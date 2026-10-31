@@ -14,7 +14,11 @@ import { PrismaService } from '../src/prisma/prisma.service.js';
 
 describe('Reservations (e2e)', () => {
   let app: INestApplication<App>;
-  const payments = { confirm: vi.fn(), refund: vi.fn() };
+  const payments = {
+    confirm: vi.fn(),
+    refund: vi.fn(),
+    lookup: vi.fn(),
+  };
 
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -34,6 +38,8 @@ describe('Reservations (e2e)', () => {
     payments.confirm.mockResolvedValue(true);
     payments.refund.mockReset();
     payments.refund.mockResolvedValue(true);
+    payments.lookup.mockReset();
+    payments.lookup.mockResolvedValue('unknown');
   });
 
   afterAll(async () => {
@@ -1132,6 +1138,22 @@ describe('Reservations (e2e)', () => {
     expect(ranged.body.items.map((item: { id: string }) => item.id)).toContain(
       past.id,
     );
+  });
+
+  it('accepts a title search that contains boolean operators', async () => {
+    const customer = await loginAs(app, Role.CUSTOMER);
+
+    await request(app.getHttpServer())
+      .get('/api/v1/events')
+      .query({ q: 'live(' })
+      .set(bearer(customer.token))
+      .expect(200);
+
+    await request(app.getHttpServer())
+      .get('/api/v1/events')
+      .query({ q: '+-~' })
+      .set(bearer(customer.token))
+      .expect(200);
   });
 });
 

@@ -316,6 +316,7 @@ describe('Auth (e2e)', () => {
       message: 'Too many requests',
       error: 'Too Many Requests',
       statusCode: 429,
+      code: 'RATE_LIMITED',
     });
     expect(
       register.responses['429'].content['application/json'].example,
@@ -323,6 +324,7 @@ describe('Auth (e2e)', () => {
       message: 'Too many requests',
       error: 'Too Many Requests',
       statusCode: 429,
+      code: 'RATE_LIMITED',
     });
     expect(register.responses['201'].description).toBe(
       'Created customer account',

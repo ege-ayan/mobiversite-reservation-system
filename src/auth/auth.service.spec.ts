@@ -18,6 +18,11 @@ describe('AuthService', () => {
   const jwt = {
     signAsync: vi.fn(),
   };
+  const refreshTokens = {
+    create: vi.fn().mockResolvedValue({}),
+    findUnique: vi.fn(),
+    updateMany: vi.fn(),
+  };
 
   beforeEach(async () => {
     users.findUnique.mockReset();
@@ -32,7 +37,7 @@ describe('AuthService', () => {
           provide: PrismaService,
           useValue: {
             user: users,
-            refreshToken: { create: vi.fn().mockResolvedValue({}) },
+            refreshToken: refreshTokens,
           },
         },
         { provide: JwtService, useValue: jwt },
@@ -197,6 +202,27 @@ describe('AuthService', () => {
       await expect(unknownEmail).rejects.toBeInstanceOf(UnauthorizedException);
       await expect(unknownEmail).rejects.toThrow('Invalid email or password');
       expect(jwt.signAsync).not.toHaveBeenCalled();
+    });
+
+    it('revokes the session family when a refresh token is reused', async () => {
+      refreshTokens.create.mockClear();
+      refreshTokens.findUnique.mockResolvedValue({
+        id: 'token-id',
+        userId: storedUser.id,
+        revokedAt: new Date(),
+        expiresAt: new Date(Date.now() + 60_000),
+        user: storedUser,
+      });
+      refreshTokens.updateMany.mockResolvedValue({ count: 1 });
+
+      await expect(service.refresh('again')).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
+      expect(refreshTokens.updateMany).toHaveBeenCalledWith({
+        where: { userId: storedUser.id, revokedAt: null },
+        data: { revokedAt: expect.any(Date) },
+      });
+      expect(refreshTokens.create).not.toHaveBeenCalled();
     });
   });
 });
