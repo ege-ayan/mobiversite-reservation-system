@@ -1,8 +1,7 @@
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
-  // Resolves the path aliases declared in tsconfig.json, including the ones
-  // added by `nest g library`. Requires Vite 8, which ships this option.
+  // Resolves the path aliases declared in tsconfig.json. Requires Vite 8.
   resolve: { tsconfigPaths: true },
   test: {
     globals: true,

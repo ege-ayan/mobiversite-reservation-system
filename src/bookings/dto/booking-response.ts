@@ -18,11 +18,23 @@ export class BookingResponse {
   @ApiProperty({ example: '25.00' })
   ticketPrice: string;
 
+  @ApiProperty({ example: '50.00' })
+  totalAmount: string;
+
   @ApiProperty({
     format: 'date-time',
     example: '2026-10-30T18:30:00.000Z',
   })
   expiresAt: Date;
+
+  @ApiProperty({ type: String, format: 'date-time', nullable: true })
+  paidAt: Date | null;
+
+  @ApiProperty({ type: String, format: 'date-time', nullable: true })
+  cancelledAt: Date | null;
+
+  @ApiProperty({ type: String, format: 'date-time', nullable: true })
+  refundedAt: Date | null;
 
   @ApiProperty({ example: '2026-10-30T18:00:00.000Z' })
   createdAt: Date;

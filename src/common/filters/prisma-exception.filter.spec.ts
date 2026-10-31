@@ -72,6 +72,7 @@ describe('PrismaExceptionFilter', () => {
       message: 'Unexpected database error',
       error: 'Internal Server Error',
       statusCode: 500,
+      code: 'DATABASE_ERROR',
     });
   });
 });

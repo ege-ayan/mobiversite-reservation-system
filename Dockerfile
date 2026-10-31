@@ -31,4 +31,4 @@ USER node
 
 EXPOSE 3000
 
-ENTRYPOINT ["sh", "-c", "npx prisma migrate deploy && node prisma/seed.mjs && exec node dist/main.js"]
+ENTRYPOINT ["node", "dist/main.js"]

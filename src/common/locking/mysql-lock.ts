@@ -1,8 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import mariadb from 'mariadb';
-import type { EnvironmentVariables } from '../config/env.validation.js';
-import { mysqlConnectionConfig } from '../prisma/mysql-config.js';
+import type { EnvironmentVariables } from '../../config/env.validation.js';
+import { mysqlConnectionConfig } from '../../prisma/mysql-config.js';
 
 export const SWEEP_LOCK_NAME = 'mobiversite_booking_expiry';
 export const PAYMENT_LOCK_NAME = 'mobiversite_payment_reconcile';

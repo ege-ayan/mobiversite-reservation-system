@@ -21,6 +21,12 @@ export const environmentSchema = z
       .min(1)
       .max(100)
       .default(10),
+    PAYMENT_WEBHOOK_SECRET: z.string().min(16).default('dev-webhook-secret'),
+    REFRESH_TOKEN_EXPIRES_IN_SECONDS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(604_800),
     RATE_LIMIT_STORE: z.enum(['memory', 'redis']).default('memory'),
     REDIS_URL: z.preprocess(
       (value) => (value === '' ? undefined : value),
@@ -33,6 +39,17 @@ export const environmentSchema = z
         code: 'custom',
         path: ['JWT_SECRET'],
         message: 'JWT_SECRET must be at least 32 characters in production',
+      });
+    }
+    if (
+      value.NODE_ENV === 'production' &&
+      value.PAYMENT_WEBHOOK_SECRET.length < 32
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['PAYMENT_WEBHOOK_SECRET'],
+        message:
+          'PAYMENT_WEBHOOK_SECRET must be at least 32 characters in production',
       });
     }
     if (value.RATE_LIMIT_STORE === 'redis' && value.REDIS_URL === undefined) {

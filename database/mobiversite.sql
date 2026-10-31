@@ -1,11 +1,17 @@
 -- Mobiversite reservation schema and seed data.
--- Import into an empty MySQL 8 database. The API also applies prisma/migrations on startup;
--- the _prisma_migrations rows below make that a no-op after this import.
+-- Import into an empty MySQL 8 database. Compose applies prisma/migrations in the
+-- migrate service before the API starts. The _prisma_migrations rows below make
+-- that a no-op after this import.
 -- Admin: admin@mobiversite.local / change-me-admin
 
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
 
+DROP TABLE IF EXISTS `booking_events`;
+DROP TABLE IF EXISTS `refresh_tokens`;
+DROP TABLE IF EXISTS `payment_attempts`;
+DROP TABLE IF EXISTS `bookings`;
+DROP TABLE IF EXISTS `events`;
 DROP TABLE IF EXISTS `users`;
 CREATE TABLE `users` (
   `id` char(36) COLLATE utf8mb4_unicode_ci NOT NULL,
@@ -34,6 +40,7 @@ CREATE TABLE `events` (
   `sales_closed_at` datetime(3) DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `events_deleted_at_sales_closed_at_starts_at_id_idx` (`deleted_at`,`sales_closed_at`,`starts_at`,`id`),
+  FULLTEXT KEY `events_title_idx` (`title`),
   CONSTRAINT `events_available_tickets_check` CHECK (((`available_tickets` >= 0) and (`available_tickets` <= `total_tickets`)))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -48,6 +55,9 @@ CREATE TABLE `bookings` (
   `expires_at` datetime(3) NOT NULL,
   `created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   `updated_at` datetime(3) NOT NULL,
+  `paid_at` datetime(3) DEFAULT NULL,
+  `cancelled_at` datetime(3) DEFAULT NULL,
+  `refunded_at` datetime(3) DEFAULT NULL,
   `idempotency_key` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `request_hash` char(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   PRIMARY KEY (`id`),
@@ -59,6 +69,31 @@ CREATE TABLE `bookings` (
   CONSTRAINT `bookings_event_id_fkey` FOREIGN KEY (`event_id`) REFERENCES `events` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE,
   CONSTRAINT `bookings_user_id_fkey` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE,
   CONSTRAINT `bookings_quantity_check` CHECK ((`quantity` >= 1))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE `booking_events` (
+  `id` char(36) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `booking_id` char(36) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `from_status` enum('HELD','PAID','CANCELLED','EXPIRED','REFUNDED') COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `to_status` enum('HELD','PAID','CANCELLED','EXPIRED','REFUNDED') COLLATE utf8mb4_unicode_ci NOT NULL,
+  `reason` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  KEY `booking_events_booking_id_created_at_idx` (`booking_id`,`created_at`),
+  CONSTRAINT `booking_events_booking_id_fkey` FOREIGN KEY (`booking_id`) REFERENCES `bookings` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE `refresh_tokens` (
+  `id` char(36) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `user_id` char(36) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `token_hash` char(64) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `expires_at` datetime(3) NOT NULL,
+  `revoked_at` datetime(3) DEFAULT NULL,
+  `created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `refresh_tokens_token_hash_key` (`token_hash`),
+  KEY `refresh_tokens_user_id_revoked_at_idx` (`user_id`,`revoked_at`),
+  CONSTRAINT `refresh_tokens_user_id_fkey` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 DROP TABLE IF EXISTS `payment_attempts`;
@@ -96,6 +131,7 @@ INSERT INTO `_prisma_migrations` (`id`, `checksum`, `finished_at`, `migration_na
 INSERT INTO `_prisma_migrations` (`id`, `checksum`, `finished_at`, `migration_name`, `logs`, `rolled_back_at`, `started_at`, `applied_steps_count`) VALUES ('f12281bf-1744-4439-a83f-b3e3a9aa1436', 'c59df3b4ef449d7c8568521f3517aa7046f41968c8cdab1baf6cba397847c073', '2026-10-30 18:22:21.360', '20261031001500_booking_idempotency_and_checks', NULL, NULL, '2026-10-30 18:22:21.028', '1');
 INSERT INTO `_prisma_migrations` (`id`, `checksum`, `finished_at`, `migration_name`, `logs`, `rolled_back_at`, `started_at`, `applied_steps_count`) VALUES ('36a1dbc8-8260-41af-ac2e-dbafdb52c0e7', 'a87549c4dd9f806ce51daf1c2a1de79d088b7552ec9ea300471919910680ccf1', '2026-10-31 06:25:32.731', '20261031120300_refunds_and_catalog_index', NULL, NULL, '2026-10-31 06:25:32.691', '1');
 INSERT INTO `_prisma_migrations` (`id`, `checksum`, `finished_at`, `migration_name`, `logs`, `rolled_back_at`, `started_at`, `applied_steps_count`) VALUES ('b7c1e2a4-6d58-4f0a-9c31-2e8a7b6d5c40', '00aad5b7a72d916f5f20fdee3d47a27fd869ffde43c8ca5e2598302d5b01a406', '2026-10-31 11:00:00.000', '20261031140000_sales_window_and_payment_attempts', NULL, NULL, '2026-10-31 11:00:00.000', '1');
+INSERT INTO `_prisma_migrations` (`id`, `checksum`, `finished_at`, `migration_name`, `logs`, `rolled_back_at`, `started_at`, `applied_steps_count`) VALUES ('f8900dd4-1bb5-46a1-82c4-1e64d33b8a1d', '6c3fe8c8e9a314aff383768186d5f892589264d8941ba0ad55cfb14a1faa5b88', '2026-10-31 14:00:00.000', '20261031160000_audit_refresh_and_search', NULL, NULL, '2026-10-31 14:00:00.000', '1');
 
 INSERT INTO `users` (`id`, `email`, `password_hash`, `role`, `created_at`, `updated_at`) VALUES (
   '00000000-0000-7000-8000-000000000001',

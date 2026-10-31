@@ -1,11 +1,9 @@
-import {
-  ConflictException,
-  Injectable,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { createHash, randomBytes } from 'node:crypto';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import bcrypt from 'bcryptjs';
+import { conflict, unauthorized } from '../common/errors/app.exception.js';
 import type { EnvironmentVariables } from '../config/env.validation.js';
 import { Prisma, type Role } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -29,6 +27,7 @@ type UserRecord = {
 @Injectable()
 export class AuthService {
   private readonly expiresInSeconds: number;
+  private readonly refreshExpiresInSeconds: number;
   private dummyPasswordHash?: Promise<string>;
 
   constructor(
@@ -39,6 +38,12 @@ export class AuthService {
     this.expiresInSeconds = config.get('JWT_EXPIRES_IN_SECONDS', {
       infer: true,
     });
+    this.refreshExpiresInSeconds = config.get(
+      'REFRESH_TOKEN_EXPIRES_IN_SECONDS',
+      {
+        infer: true,
+      },
+    );
   }
 
   async me(userId: string): Promise<UserResponse> {
@@ -53,7 +58,7 @@ export class AuthService {
     const email = normalizeEmail(request.email);
     const existing = await this.prisma.user.findUnique({ where: { email } });
     if (existing) {
-      throw new ConflictException('Email already registered');
+      throw conflict('Email already registered', 'EMAIL_TAKEN');
     }
 
     try {
@@ -69,7 +74,7 @@ export class AuthService {
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === 'P2002'
       ) {
-        throw new ConflictException('Email already registered');
+        throw conflict('Email already registered', 'EMAIL_TAKEN');
       }
       throw error;
     }
@@ -86,19 +91,66 @@ export class AuthService {
     );
 
     if (!user || !passwordMatches) {
-      throw new UnauthorizedException('Invalid email or password');
+      throw unauthorized('Invalid email or password', 'INVALID_CREDENTIALS');
     }
 
+    return this.issueSession(user);
+  }
+
+  async refresh(refreshToken: string): Promise<LoginResponse> {
+    const stored = await this.prisma.refreshToken.findUnique({
+      where: { tokenHash: hashRefreshToken(refreshToken) },
+      include: { user: true },
+    });
+    if (
+      !stored ||
+      stored.revokedAt ||
+      stored.expiresAt.getTime() <= Date.now()
+    ) {
+      throw unauthorized('Invalid refresh token', 'INVALID_REFRESH_TOKEN');
+    }
+
+    const rotated = await this.prisma.refreshToken.updateMany({
+      where: {
+        id: stored.id,
+        revokedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+      data: { revokedAt: new Date() },
+    });
+    if (rotated.count !== 1) {
+      throw unauthorized('Invalid refresh token', 'INVALID_REFRESH_TOKEN');
+    }
+    return this.issueSession(stored.user);
+  }
+
+  async logout(refreshToken: string): Promise<void> {
+    await this.prisma.refreshToken.updateMany({
+      where: { tokenHash: hashRefreshToken(refreshToken), revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+  }
+
+  private async issueSession(user: UserRecord): Promise<LoginResponse> {
+    const secret = issueRefreshSecret();
+    await this.prisma.refreshToken.create({
+      data: {
+        userId: user.id,
+        tokenHash: secret.tokenHash,
+        expiresAt: new Date(Date.now() + this.refreshExpiresInSeconds * 1000),
+      },
+    });
     const payload: AccessTokenPayload = {
       sub: user.id,
       email: user.email,
       role: user.role,
     };
-
     return {
       accessToken: await this.jwtService.signAsync(payload),
       tokenType: 'Bearer',
       expiresIn: this.expiresInSeconds,
+      refreshToken: secret.refreshToken,
+      refreshExpiresIn: this.refreshExpiresInSeconds,
       user: toUserResponse(user),
     };
   }
@@ -110,6 +162,15 @@ export class AuthService {
     );
     return this.dummyPasswordHash;
   }
+}
+
+function issueRefreshSecret() {
+  const refreshToken = randomBytes(32).toString('base64url');
+  return { refreshToken, tokenHash: hashRefreshToken(refreshToken) };
+}
+
+function hashRefreshToken(token: string) {
+  return createHash('sha256').update(token).digest('hex');
 }
 
 function normalizeEmail(email: string) {

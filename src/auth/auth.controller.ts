@@ -12,6 +12,7 @@ import {
   ApiBearerAuth,
   ApiConflictResponse,
   ApiCreatedResponse,
+  ApiNoContentResponse,
   ApiOkResponse,
   ApiOperation,
   ApiTags,
@@ -30,6 +31,7 @@ import {
 } from '../common/dto/error-response.js';
 import { LoginResponse } from './dto/login-response.js';
 import { LoginRequest } from './dto/login-request.js';
+import { RefreshRequest } from './dto/refresh-request.js';
 import { RegisterRequest } from './dto/register-request.js';
 import { UserResponse } from './dto/user-response.js';
 
@@ -65,6 +67,7 @@ export class AuthController {
       message: 'Invalid email or password',
       error: 'Unauthorized',
       statusCode: 401,
+      code: 'INVALID_CREDENTIALS',
     },
   })
   @ApiBadRequestResponse({
@@ -91,6 +94,7 @@ export class AuthController {
       message: 'Email already registered',
       error: 'Conflict',
       statusCode: 409,
+      code: 'EMAIL_TAKEN',
     },
   })
   @ApiBadRequestResponse({
@@ -100,6 +104,31 @@ export class AuthController {
   @ApiTooManyRequestsResponse(tooManyRequests)
   register(@Body() body: RegisterRequest): Promise<UserResponse> {
     return this.authService.register(body);
+  }
+
+  @Public()
+  @UseGuards(AuthThrottlerGuard)
+  @Post('refresh')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Rotate a refresh token and issue a new access token',
+  })
+  @ApiOkResponse({ type: LoginResponse })
+  @ApiUnauthorizedResponse({ description: 'Invalid refresh token' })
+  @ApiTooManyRequestsResponse(tooManyRequests)
+  refresh(@Body() body: RefreshRequest): Promise<LoginResponse> {
+    return this.authService.refresh(body.refreshToken);
+  }
+
+  @Public()
+  @UseGuards(AuthThrottlerGuard)
+  @Post('logout')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Revoke a refresh token' })
+  @ApiNoContentResponse()
+  @ApiTooManyRequestsResponse(tooManyRequests)
+  logout(@Body() body: RefreshRequest): Promise<void> {
+    return this.authService.logout(body.refreshToken);
   }
 
   @Get('me')

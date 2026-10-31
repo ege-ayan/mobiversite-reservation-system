@@ -1,0 +1,98 @@
+@baseUrl = http://localhost:3000
+@email = customer@example.test
+@password = correct horse battery
+@adminEmail = admin@mobiversite.local
+@adminPassword = change-me-admin
+
+### Register a customer
+POST {{baseUrl}}/api/v1/auth/register
+Content-Type: application/json
+
+{
+  "email": "{{email}}",
+  "password": "{{password}}"
+}
+
+### Login
+# @name login
+POST {{baseUrl}}/api/v1/auth/login
+Content-Type: application/json
+
+{
+  "email": "{{email}}",
+  "password": "{{password}}"
+}
+
+### Current user
+GET {{baseUrl}}/api/v1/auth/me
+Authorization: Bearer {{login.response.body.accessToken}}
+
+### Refresh
+# @name refresh
+POST {{baseUrl}}/api/v1/auth/refresh
+Content-Type: application/json
+
+{
+  "refreshToken": "{{login.response.body.refreshToken}}"
+}
+
+### Logout
+POST {{baseUrl}}/api/v1/auth/logout
+Content-Type: application/json
+
+{
+  "refreshToken": "{{refresh.response.body.refreshToken}}"
+}
+
+### Admin login
+# @name admin
+POST {{baseUrl}}/api/v1/auth/login
+Content-Type: application/json
+
+{
+  "email": "{{adminEmail}}",
+  "password": "{{adminPassword}}"
+}
+
+### Create an event
+# @name event
+POST {{baseUrl}}/api/v1/events
+Authorization: Bearer {{admin.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "title": "Mobiversite Live",
+  "description": "An evening of talks and music.",
+  "venue": "Kadikoy",
+  "startsAt": "2027-06-01T18:00:00.000Z",
+  "ticketPrice": 25,
+  "totalTickets": 100
+}
+
+### Catalog
+GET {{baseUrl}}/api/v1/events?q=live
+Authorization: Bearer {{login.response.body.accessToken}}
+
+### Admin event list
+GET {{baseUrl}}/api/v1/admin/events?status=on_sale
+Authorization: Bearer {{admin.response.body.accessToken}}
+
+### Reserve
+# @name booking
+POST {{baseUrl}}/api/v1/bookings
+Authorization: Bearer {{login.response.body.accessToken}}
+Content-Type: application/json
+Idempotency-Key: reserve-1
+
+{
+  "eventId": "{{event.response.body.id}}",
+  "quantity": 1
+}
+
+### Pay
+POST {{baseUrl}}/api/v1/bookings/{{booking.response.body.id}}/payment
+Authorization: Bearer {{login.response.body.accessToken}}
+
+### Cancel
+POST {{baseUrl}}/api/v1/bookings/{{booking.response.body.id}}/cancel
+Authorization: Bearer {{login.response.body.accessToken}}

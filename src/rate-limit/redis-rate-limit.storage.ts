@@ -83,8 +83,8 @@ export class RedisRateLimitStorage
     throttlerName: string,
   ): Promise<ThrottlerStorageRecord> {
     const slot = `{${throttlerName}:${key}}`;
-    const hitsKey = `mobiversite:auth-rate:${slot}`;
-    const blockKey = `mobiversite:auth-rate:${slot}:block`;
+    const hitsKey = `mobiversite:rate:${slot}`;
+    const blockKey = `mobiversite:rate:${slot}:block`;
     const result = await this.redis.eval(
       INCREMENT_SCRIPT,
       2,

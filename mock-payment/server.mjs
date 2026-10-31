@@ -1,6 +1,9 @@
+import { createHmac } from 'node:crypto';
 import { createServer } from 'node:http';
 
 const payments = new Map();
+const webhookUrl = process.env.PAYMENT_WEBHOOK_URL;
+const webhookSecret = process.env.PAYMENT_WEBHOOK_SECRET;
 
 const server = createServer((request, response) => {
   const chunks = [];
@@ -31,24 +34,12 @@ const server = createServer((request, response) => {
         write(response, 404, { paid: false });
         return;
       }
-      write(response, 200, stored);
+      write(response, 200, { paid: stored.paid });
       return;
     }
 
     if (request.method === 'POST' && url.pathname === '/payments') {
-      const key = header(request, 'idempotency-key') || body.bookingId;
-      if (key && payments.has(key)) {
-        const stored = payments.get(key);
-        write(response, stored.paid ? 200 : 402, stored);
-        return;
-      }
-      const declined =
-        header(request, 'x-mock-payment') === 'decline' || body.decline === true;
-      const result = { paid: !declined };
-      if (key) {
-        payments.set(key, result);
-      }
-      write(response, result.paid ? 200 : 402, result);
+      handlePayment(request, response, body);
       return;
     }
 
@@ -67,6 +58,79 @@ const server = createServer((request, response) => {
 });
 
 server.listen(4000, '0.0.0.0');
+
+function handlePayment(request, response, body) {
+  const key = header(request, 'idempotency-key') || body.bookingId;
+  if (key && payments.has(key)) {
+    const stored = payments.get(key);
+    write(response, stored.paid ? 200 : 402, { paid: stored.paid });
+    return;
+  }
+
+  const decision = header(request, 'x-mock-payment');
+  if (decision === 'error') {
+    write(response, 500, { paid: false });
+    return;
+  }
+  if (decision === 'timeout') {
+    const result = remember(key, body, true);
+    setTimeout(() => {
+      notify(key, result, body);
+      write(response, 200, { paid: true });
+    }, 8_000);
+    return;
+  }
+  if (decision === 'slow') {
+    const result = remember(key, body, true);
+    setTimeout(() => {
+      notify(key, result, body);
+      write(response, 200, { paid: true });
+    }, 2_000);
+    return;
+  }
+  if (decision === 'error-after-charge') {
+    const result = remember(key, body, true);
+    notify(key, result, body);
+    write(response, 500, { paid: false });
+    return;
+  }
+
+  const declined = decision === 'decline' || body.decline === true;
+  const result = remember(key, body, !declined);
+  notify(key, result, body);
+  write(response, result.paid ? 200 : 402, { paid: result.paid });
+}
+
+function remember(key, body, paid) {
+  const result = { paid, bookingId: body.bookingId, amount: body.amount };
+  if (key) {
+    payments.set(key, result);
+  }
+  return result;
+}
+
+function notify(key, result, body) {
+  if (!webhookUrl || !webhookSecret || !key) {
+    return;
+  }
+  const payload = JSON.stringify({
+    idempotencyKey: key,
+    bookingId: body.bookingId ?? null,
+    amount: body.amount ?? null,
+    paid: result.paid,
+  });
+  const signature = createHmac('sha256', webhookSecret)
+    .update(payload)
+    .digest('hex');
+  fetch(webhookUrl, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-payment-signature': signature,
+    },
+    body: payload,
+  }).catch(() => undefined);
+}
 
 function forget(bookingId) {
   for (const key of payments.keys()) {

@@ -32,8 +32,8 @@ describe('RedisRateLimitStorage', () => {
     expect(evalCommand).toHaveBeenCalledWith(
       expect.stringContaining('INCR'),
       2,
-      'mobiversite:auth-rate:{default:tracker}',
-      'mobiversite:auth-rate:{default:tracker}:block',
+      'mobiversite:rate:{default:tracker}',
+      'mobiversite:rate:{default:tracker}:block',
       60_000,
       10,
       60_000,

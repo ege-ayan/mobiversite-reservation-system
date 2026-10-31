@@ -18,6 +18,18 @@ export class LoginResponse {
   })
   expiresIn: number;
 
+  @ApiProperty({
+    description:
+      'Opaque refresh token. Send it to /auth/refresh or /auth/logout.',
+  })
+  refreshToken: string;
+
+  @ApiProperty({
+    description: 'Refresh token lifetime in seconds',
+    example: 604800,
+  })
+  refreshExpiresIn: number;
+
   @ApiProperty({ type: UserResponse })
   user: UserResponse;
 }

@@ -9,6 +9,7 @@ type ErrorBody = {
   message: string;
   error: string;
   statusCode: number;
+  code: string;
 };
 
 @Catch(
@@ -43,6 +44,7 @@ function toErrorBody(
       message: 'Unique constraint failed',
       error: 'Conflict',
       statusCode: 409,
+      code: 'UNIQUE_CONFLICT',
     };
   }
   if (
@@ -53,6 +55,7 @@ function toErrorBody(
       message: 'Record not found',
       error: 'Not Found',
       statusCode: 404,
+      code: 'NOT_FOUND',
     };
   }
   if (isDatabaseBusy(exception)) {
@@ -60,6 +63,7 @@ function toErrorBody(
       message: 'The database is busy, try again',
       error: 'Service Unavailable',
       statusCode: 503,
+      code: 'DATABASE_BUSY',
     };
   }
   if (/check constraint|out of range|data truncated/i.test(exception.message)) {
@@ -67,12 +71,14 @@ function toErrorBody(
       message: 'Request is outside the values the database can store',
       error: 'Bad Request',
       statusCode: 400,
+      code: 'INVALID_DATA',
     };
   }
   return {
     message: 'Unexpected database error',
     error: 'Internal Server Error',
     statusCode: 500,
+    code: 'DATABASE_ERROR',
   };
 }
 

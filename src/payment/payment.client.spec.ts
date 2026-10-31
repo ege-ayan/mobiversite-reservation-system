@@ -97,10 +97,25 @@ describe('PaymentClient', () => {
         bookingId: 'booking-id',
         amount: '25.00',
         idempotencyKey: 'booking-id',
-        decline: true,
+        decision: 'decline',
       }),
     ).resolves.toBe(false);
     expect(lastRequest.mockDecision).toBe('decline');
+  });
+
+  it('treats a provider 500 as unavailable instead of a decline', async () => {
+    replaceHandler(server, (_request, response) => {
+      response.writeHead(500, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ paid: false }));
+    });
+
+    await expect(
+      client.confirm({
+        bookingId: 'booking-id',
+        amount: '25.00',
+        idempotencyKey: 'booking-id',
+      }),
+    ).rejects.toBeInstanceOf(BadGatewayException);
   });
 
   it('reports an unknown payment lookup', async () => {

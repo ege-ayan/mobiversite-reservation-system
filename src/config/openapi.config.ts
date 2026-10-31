@@ -16,6 +16,7 @@ export function setupOpenApi(app: INestApplication) {
     .addTag('Bookings', 'Ticket reservations')
     .addTag('Events', 'Event catalog and administration')
     .addTag('Health', 'Service health')
+    .addTag('Webhooks', 'Payment provider callbacks')
     .addBearerAuth()
     .build();
 

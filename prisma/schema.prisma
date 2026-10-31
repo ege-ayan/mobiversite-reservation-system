@@ -33,9 +33,10 @@ model User {
   email        String    @unique @db.VarChar(255)
   passwordHash String    @map("password_hash") @db.VarChar(255)
   role         Role      @default(CUSTOMER)
-  createdAt    DateTime  @default(now()) @map("created_at")
-  updatedAt    DateTime  @updatedAt @map("updated_at")
-  bookings     Booking[]
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+  bookings      Booking[]
+  refreshTokens RefreshToken[]
 
   @@map("users")
 }
@@ -55,6 +56,7 @@ model Event {
   salesClosedAt    DateTime? @map("sales_closed_at")
   bookings         Booking[]
 
+  @@fulltext([title])
   @@index([deletedAt, salesClosedAt, startsAt, id])
   @@map("events")
 }
@@ -67,13 +69,17 @@ model Booking {
   status         BookingStatus @default(HELD)
   ticketPrice    Decimal       @map("ticket_price") @db.Decimal(10, 2)
   expiresAt      DateTime      @map("expires_at")
-  idempotencyKey String?       @map("idempotency_key") @db.VarChar(255)
-  requestHash    String?       @map("request_hash") @db.Char(64)
+  idempotencyKey  String?          @map("idempotency_key") @db.VarChar(255)
+  requestHash     String?          @map("request_hash") @db.Char(64)
+  paidAt          DateTime?        @map("paid_at")
+  cancelledAt     DateTime?        @map("cancelled_at")
+  refundedAt      DateTime?        @map("refunded_at")
   createdAt       DateTime         @default(now()) @map("created_at")
   updatedAt       DateTime         @updatedAt @map("updated_at")
   user            User             @relation(fields: [userId], references: [id])
   event           Event            @relation(fields: [eventId], references: [id])
   paymentAttempts PaymentAttempt[]
+  history         BookingEvent[]
 
   @@unique([userId, idempotencyKey])
   @@index([userId, createdAt])
@@ -96,4 +102,30 @@ model PaymentAttempt {
   @@index([bookingId, state])
   @@index([state, updatedAt])
   @@map("payment_attempts")
+}
+
+model BookingEvent {
+  id         String         @id @default(uuid(7)) @db.Char(36)
+  bookingId  String         @map("booking_id") @db.Char(36)
+  fromStatus BookingStatus? @map("from_status")
+  toStatus   BookingStatus  @map("to_status")
+  reason     String         @db.VarChar(64)
+  createdAt  DateTime       @default(now()) @map("created_at")
+  booking    Booking        @relation(fields: [bookingId], references: [id])
+
+  @@index([bookingId, createdAt])
+  @@map("booking_events")
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid(7)) @db.Char(36)
+  userId    String    @map("user_id") @db.Char(36)
+  tokenHash String    @unique @map("token_hash") @db.Char(64)
+  expiresAt DateTime  @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  user      User      @relation(fields: [userId], references: [id])
+
+  @@index([userId, revokedAt])
+  @@map("refresh_tokens")
 }

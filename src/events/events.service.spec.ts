@@ -4,8 +4,8 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { BookingsService } from '../bookings/bookings.service.js';
 import { Prisma } from '../generated/prisma/client.js';
+import { EventCancellationService } from './event-cancellation.service.js';
 import { InventoryService } from '../inventory/inventory.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { EventsService } from './events.service.js';
@@ -28,7 +28,10 @@ describe('EventsService', () => {
     update: vi.fn(),
     delete: vi.fn(),
   };
-  const reservations = { settleReservations: vi.fn() };
+  const cancellation = {
+    request: vi.fn(),
+    processOne: vi.fn(),
+  };
   const transaction = vi.fn();
 
   beforeEach(async () => {
@@ -36,7 +39,13 @@ describe('EventsService', () => {
     events.findUnique.mockReset();
     events.update.mockReset();
     events.delete.mockReset();
-    reservations.settleReservations.mockReset();
+    cancellation.request.mockReset();
+    cancellation.request.mockImplementation(async (id: string) => ({
+      id,
+      status: 'CANCELLING' as const,
+    }));
+    cancellation.processOne.mockReset();
+    cancellation.processOne.mockResolvedValue(undefined);
     transaction.mockReset();
 
     const moduleRef = await Test.createTestingModule({
@@ -46,7 +55,7 @@ describe('EventsService', () => {
           provide: PrismaService,
           useValue: { event: events, $transaction: transaction },
         },
-        { provide: BookingsService, useValue: reservations },
+        { provide: EventCancellationService, useValue: cancellation },
         InventoryService,
       ],
     }).compile();
@@ -93,33 +102,22 @@ describe('EventsService', () => {
     expect(tx.event.update).not.toHaveBeenCalled();
   });
 
-  it('settles reservations and then hides the event', async () => {
-    const tx = lockedEventTx(storedEvent());
-    transaction.mockImplementation(
-      async (run: (client: typeof tx) => unknown) => run(tx),
-    );
+  it('closes sales and starts cancellation without waiting for refunds', async () => {
+    const result = await service.remove('event-id');
 
-    await service.remove('event-id');
-
-    expect(reservations.settleReservations).toHaveBeenCalledWith('event-id');
-    expect(tx.event.update).toHaveBeenCalledWith({
-      where: { id: 'event-id' },
-      data: { deletedAt: expect.any(Date) },
-    });
+    expect(result).toEqual({ id: 'event-id', status: 'CANCELLING' });
+    expect(cancellation.request).toHaveBeenCalledWith('event-id');
+    expect(cancellation.processOne).toHaveBeenCalledWith('event-id');
     expect(events.delete).not.toHaveBeenCalled();
   });
 
   it('rejects deleting an event that is already hidden', async () => {
-    const tx = lockedEventTx(storedEvent({ deletedAt: new Date() }));
-    transaction.mockImplementation(
-      async (run: (client: typeof tx) => unknown) => run(tx),
-    );
+    cancellation.request.mockRejectedValueOnce(new NotFoundException());
 
     await expect(service.remove('event-id')).rejects.toBeInstanceOf(
       NotFoundException,
     );
-    expect(reservations.settleReservations).not.toHaveBeenCalled();
-    expect(tx.event.update).not.toHaveBeenCalled();
+    expect(cancellation.processOne).not.toHaveBeenCalled();
   });
 
   it('returns one visible event', async () => {
@@ -207,17 +205,13 @@ describe('EventsService', () => {
     );
   });
 
-  it('rejects deleting an event that is not locked', async () => {
-    transaction.mockImplementation(
-      async (
-        run: (client: { $queryRaw: () => Promise<unknown[]> }) => unknown,
-      ) => run({ $queryRaw: vi.fn().mockResolvedValue([]) }),
-    );
+  it('does not start cancellation when the event cannot be locked', async () => {
+    cancellation.request.mockRejectedValueOnce(new NotFoundException());
 
     await expect(service.remove('missing')).rejects.toBeInstanceOf(
       NotFoundException,
     );
-    expect(reservations.settleReservations).not.toHaveBeenCalled();
+    expect(cancellation.processOne).not.toHaveBeenCalled();
   });
 
   it('filters the catalog by title and start time', async () => {
@@ -234,7 +228,7 @@ describe('EventsService', () => {
         where: {
           deletedAt: null,
           salesClosedAt: null,
-          title: { contains: 'live' },
+          title: { search: 'live' },
           startsAt: {
             gte: new Date('2026-12-01T00:00:00.000Z'),
             lte: new Date('2026-12-31T00:00:00.000Z'),

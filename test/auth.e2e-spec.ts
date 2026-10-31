@@ -26,7 +26,13 @@ describe('Auth (e2e)', () => {
     await prisma.paymentAttempt.deleteMany({
       where: { booking: { user: { email: { endsWith: '@example.test' } } } },
     });
+    await prisma.bookingEvent.deleteMany({
+      where: { booking: { user: { email: { endsWith: '@example.test' } } } },
+    });
     await prisma.booking.deleteMany({
+      where: { user: { email: { endsWith: '@example.test' } } },
+    });
+    await prisma.refreshToken.deleteMany({
       where: { user: { email: { endsWith: '@example.test' } } },
     });
     await prisma.user.deleteMany({
@@ -47,7 +53,7 @@ describe('Auth (e2e)', () => {
     const email = uniqueEmail();
 
     const response = await request(app.getHttpServer())
-      .post('/auth/register')
+      .post('/api/v1/auth/register')
       .send({ email: ` ${email.toUpperCase()} `, password })
       .expect(201);
 
@@ -63,12 +69,12 @@ describe('Auth (e2e)', () => {
   it('rejects a duplicate email regardless of case', async () => {
     const email = uniqueEmail();
     await request(app.getHttpServer())
-      .post('/auth/register')
+      .post('/api/v1/auth/register')
       .send({ email, password })
       .expect(201);
 
     const duplicate = await request(app.getHttpServer())
-      .post('/auth/register')
+      .post('/api/v1/auth/register')
       .send({ email: email.toUpperCase(), password })
       .expect(409);
 
@@ -80,7 +86,7 @@ describe('Auth (e2e)', () => {
     const attempts = await Promise.all(
       Array.from({ length: 8 }, (_, index) =>
         request(app.getHttpServer())
-          .post('/auth/register')
+          .post('/api/v1/auth/register')
           .send({
             email: index % 2 === 0 ? email : ` ${email.toUpperCase()} `,
             password,
@@ -105,17 +111,17 @@ describe('Auth (e2e)', () => {
 
   it('rejects invalid registration bodies', async () => {
     await request(app.getHttpServer())
-      .post('/auth/register')
+      .post('/api/v1/auth/register')
       .send({ email: 'not-an-email', password })
       .expect(400);
 
     await request(app.getHttpServer())
-      .post('/auth/register')
+      .post('/api/v1/auth/register')
       .send({ email: uniqueEmail(), password: 'short' })
       .expect(400);
 
     await request(app.getHttpServer())
-      .post('/auth/register')
+      .post('/api/v1/auth/register')
       .send({ email: uniqueEmail(), password, role: 'ADMIN' })
       .expect(400);
   });
@@ -123,17 +129,17 @@ describe('Auth (e2e)', () => {
   it('returns the signed-in user from the access token', async () => {
     const email = uniqueEmail();
     const registered = await request(app.getHttpServer())
-      .post('/auth/register')
+      .post('/api/v1/auth/register')
       .send({ email, password })
       .expect(201);
     const login = await request(app.getHttpServer())
-      .post('/auth/login')
+      .post('/api/v1/auth/login')
       .send({ email, password })
       .expect(200);
 
-    await request(app.getHttpServer()).get('/auth/me').expect(401);
+    await request(app.getHttpServer()).get('/api/v1/auth/me').expect(401);
     const me = await request(app.getHttpServer())
-      .get('/auth/me')
+      .get('/api/v1/auth/me')
       .set('Authorization', `Bearer ${login.body.accessToken}`)
       .expect(200);
 
@@ -148,12 +154,12 @@ describe('Auth (e2e)', () => {
   it('logs in and returns a JWT that matches the user', async () => {
     const email = uniqueEmail();
     const registered = await request(app.getHttpServer())
-      .post('/auth/register')
+      .post('/api/v1/auth/register')
       .send({ email, password })
       .expect(201);
 
     const response = await request(app.getHttpServer())
-      .post('/auth/login')
+      .post('/api/v1/auth/login')
       .send({ email: email.toUpperCase(), password })
       .expect(200);
 
@@ -183,17 +189,17 @@ describe('Auth (e2e)', () => {
   it('rejects a wrong password and an unknown email the same way', async () => {
     const email = uniqueEmail();
     await request(app.getHttpServer())
-      .post('/auth/register')
+      .post('/api/v1/auth/register')
       .send({ email, password })
       .expect(201);
 
     const wrongPassword = await request(app.getHttpServer())
-      .post('/auth/login')
+      .post('/api/v1/auth/login')
       .send({ email, password: 'not the password' })
       .expect(401);
 
     const unknownEmail = await request(app.getHttpServer())
-      .post('/auth/login')
+      .post('/api/v1/auth/login')
       .send({ email: uniqueEmail(), password })
       .expect(401);
 
@@ -204,14 +210,14 @@ describe('Auth (e2e)', () => {
   it('accepts simultaneous logins for the same account', async () => {
     const email = uniqueEmail();
     const registered = await request(app.getHttpServer())
-      .post('/auth/register')
+      .post('/api/v1/auth/register')
       .send({ email, password })
       .expect(201);
 
     const logins = await Promise.all(
       Array.from({ length: 5 }, () =>
         request(app.getHttpServer())
-          .post('/auth/login')
+          .post('/api/v1/auth/login')
           .send({ email, password }),
       ),
     );
@@ -230,7 +236,7 @@ describe('Auth (e2e)', () => {
     const logins = await Promise.all(
       Array.from({ length: 5 }, () =>
         request(app.getHttpServer())
-          .post('/auth/login')
+          .post('/api/v1/auth/login')
           .send({ email, password }),
       ),
     );
@@ -241,13 +247,49 @@ describe('Auth (e2e)', () => {
     }
   });
 
+  it('rotates a refresh token and logout revokes the replacement', async () => {
+    const email = uniqueEmail();
+    await request(app.getHttpServer())
+      .post('/api/v1/auth/register')
+      .send({ email, password })
+      .expect(201);
+    const login = await request(app.getHttpServer())
+      .post('/api/v1/auth/login')
+      .send({ email, password })
+      .expect(200);
+
+    expect(login.body.refreshToken).toEqual(expect.any(String));
+    expect(login.body.refreshExpiresIn).toBeGreaterThan(0);
+
+    const refreshed = await request(app.getHttpServer())
+      .post('/api/v1/auth/refresh')
+      .send({ refreshToken: login.body.refreshToken })
+      .expect(200);
+    expect(refreshed.body.refreshToken).not.toBe(login.body.refreshToken);
+
+    await request(app.getHttpServer())
+      .post('/api/v1/auth/refresh')
+      .send({ refreshToken: login.body.refreshToken })
+      .expect(401);
+
+    await request(app.getHttpServer())
+      .post('/api/v1/auth/logout')
+      .send({ refreshToken: refreshed.body.refreshToken })
+      .expect(204);
+
+    await request(app.getHttpServer())
+      .post('/api/v1/auth/refresh')
+      .send({ refreshToken: refreshed.body.refreshToken })
+      .expect(401);
+  });
+
   it('documents the auth operations in the OpenAPI spec', async () => {
     const response = await request(app.getHttpServer())
       .get('/docs-json')
       .expect(200);
 
-    const login = response.body.paths['/auth/login'].post;
-    const register = response.body.paths['/auth/register'].post;
+    const login = response.body.paths['/api/v1/auth/login'].post;
+    const register = response.body.paths['/api/v1/auth/register'].post;
     const schemas = response.body.components.schemas;
 
     expect(response.body.paths['/']).toBeUndefined();
@@ -257,6 +299,7 @@ describe('Auth (e2e)', () => {
       { name: 'Bookings', description: 'Ticket reservations' },
       { name: 'Events', description: 'Event catalog and administration' },
       { name: 'Health', description: 'Service health' },
+      { name: 'Webhooks', description: 'Payment provider callbacks' },
     ]);
     expect(login.tags).toEqual(['Auth']);
     expect(register.tags).toEqual(['Auth']);
@@ -267,6 +310,7 @@ describe('Auth (e2e)', () => {
       message: 'Invalid email or password',
       error: 'Unauthorized',
       statusCode: 401,
+      code: 'INVALID_CREDENTIALS',
     });
     expect(login.responses['429'].content['application/json'].example).toEqual({
       message: 'Too many requests',
@@ -289,11 +333,12 @@ describe('Auth (e2e)', () => {
       message: 'Email already registered',
       error: 'Conflict',
       statusCode: 409,
+      code: 'EMAIL_TAKEN',
     });
     expect(schemas.LoginRequest.properties.email.format).toBe('email');
     expect(schemas.RegisterRequest.properties.email.format).toBe('email');
     expect(schemas.RegisterRequest.properties.password.minLength).toBe(12);
-    expect(schemas.RegisterRequest.properties.password.maxLength).toBe(128);
+    expect(schemas.RegisterRequest.properties.password.maxLength).toBe(72);
     expect(schemas.LoginResponse.properties.accessToken.example).toEqual(
       expect.any(String),
     );

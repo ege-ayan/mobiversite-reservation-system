@@ -2,11 +2,21 @@ import { BadGatewayException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { EnvironmentVariables } from '../config/env.validation.js';
 
+export const MOCK_PAYMENT_DECISIONS = [
+  'decline',
+  'error',
+  'timeout',
+  'slow',
+  'error-after-charge',
+] as const;
+
+export type MockPaymentDecision = (typeof MOCK_PAYMENT_DECISIONS)[number];
+
 export interface PaymentConfirmation {
   bookingId: string;
   amount: string;
   idempotencyKey: string;
-  decline?: boolean;
+  decision?: MockPaymentDecision;
 }
 
 export type PaymentLookup = 'paid' | 'declined' | 'unknown';
@@ -42,13 +52,28 @@ export function paymentEndpoints(configured: string) {
   };
 }
 
-export function mockDeclineRequested(
+export function mockPaymentDecision(
   header: string | string[] | undefined,
-): boolean {
-  if (Array.isArray(header)) {
-    return header.length === 1 && header[0] === 'decline';
+  nodeEnv: string,
+): MockPaymentDecision | undefined {
+  if (nodeEnv === 'production') {
+    return undefined;
   }
-  return header === 'decline';
+  const value = Array.isArray(header)
+    ? header.length === 1
+      ? header[0]
+      : undefined
+    : header;
+  if (
+    value === 'decline' ||
+    value === 'error' ||
+    value === 'timeout' ||
+    value === 'slow' ||
+    value === 'error-after-charge'
+  ) {
+    return value;
+  }
+  return undefined;
 }
 
 @Injectable()
@@ -114,7 +139,7 @@ export class PaymentClient implements PaymentGateway {
         headers: {
           'content-type': 'application/json',
           'idempotency-key': payment.idempotencyKey,
-          ...(payment.decline ? { 'x-mock-payment': 'decline' } : {}),
+          ...(payment.decision ? { 'x-mock-payment': payment.decision } : {}),
         },
         body: JSON.stringify({
           bookingId: payment.bookingId,
@@ -126,6 +151,9 @@ export class PaymentClient implements PaymentGateway {
       throw new BadGatewayException('Payment service is unavailable');
     }
 
+    if (response.status >= 500) {
+      throw new BadGatewayException('Payment service is unavailable');
+    }
     if (!response.ok) {
       return false;
     }

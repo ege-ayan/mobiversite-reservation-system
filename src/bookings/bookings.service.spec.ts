@@ -8,11 +8,17 @@ import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { BookingStatus, Prisma } from '../generated/prisma/client.js';
 import { InventoryService } from '../inventory/inventory.service.js';
+import { SweepLock } from '../common/locking/mysql-lock.js';
+import { EventCancellationService } from '../events/event-cancellation.service.js';
 import { PAYMENT_GATEWAY } from '../payment/payment.client.js';
+import { ChargeService } from '../payment/charge.service.js';
+import { RefundService } from '../payment/refund.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { BookingQueryService } from './booking-query.service.js';
 import { BookingsService } from './bookings.service.js';
+import { ExpiryService } from './expiry.service.js';
 import { requestFingerprint } from './idempotency-key.js';
-import { SweepLock } from './sweep-lock.js';
+import { ReservationService } from './reservation.service.js';
 
 const event = {
   id: 'event-id',
@@ -64,10 +70,15 @@ describe('BookingsService', () => {
     ),
   };
   const queryRaw = vi.fn();
+  const bookingEvents = {
+    create: vi.fn().mockResolvedValue({}),
+    createMany: vi.fn().mockResolvedValue({ count: 0 }),
+  };
   const tx = {
     event: events,
     booking: bookings,
     paymentAttempt: paymentAttempts,
+    bookingEvent: bookingEvents,
     $queryRaw: queryRaw,
   };
 
@@ -129,6 +140,7 @@ describe('BookingsService', () => {
       event: events,
       booking: bookings,
       paymentAttempt: paymentAttempts,
+      bookingEvent: bookingEvents,
       $queryRaw: queryRaw,
       $transaction: transaction,
     };
@@ -136,6 +148,12 @@ describe('BookingsService', () => {
     const moduleRef = await Test.createTestingModule({
       providers: [
         BookingsService,
+        ReservationService,
+        BookingQueryService,
+        ExpiryService,
+        ChargeService,
+        RefundService,
+        EventCancellationService,
         InventoryService,
         { provide: PrismaService, useValue: prisma },
         { provide: PAYMENT_GATEWAY, useValue: payments },
@@ -264,7 +282,7 @@ describe('BookingsService', () => {
       bookingId: booking.id,
       amount: '25.00',
       idempotencyKey: booking.id,
-      decline: undefined,
+      decision: undefined,
     });
     expect(bookings.updateMany).not.toHaveBeenCalled();
   });
@@ -307,7 +325,7 @@ describe('BookingsService', () => {
 
     expect(bookings.updateMany).toHaveBeenCalledWith({
       where: { eventId: event.id, status: BookingStatus.HELD },
-      data: { status: BookingStatus.CANCELLED },
+      data: expect.objectContaining({ status: BookingStatus.CANCELLED }),
     });
     expect(payments.refund).toHaveBeenCalledWith({
       bookingId: 'paid-id',
@@ -316,7 +334,7 @@ describe('BookingsService', () => {
     });
     expect(bookings.updateMany).toHaveBeenCalledWith({
       where: { id: 'paid-id', status: BookingStatus.PAID },
-      data: { status: BookingStatus.REFUNDED },
+      data: expect.objectContaining({ status: BookingStatus.REFUNDED }),
     });
     expect(events.update).toHaveBeenCalledWith({
       where: { id: event.id },
@@ -480,12 +498,10 @@ describe('BookingsService', () => {
       'Reservation can no longer be paid',
     );
 
-    bookings.findFirst
-      .mockResolvedValueOnce({ ...heldBooking(), event })
-      .mockResolvedValueOnce({
-        ...heldBooking(),
-        event: { ...event, deletedAt: new Date() },
-      });
+    bookings.findFirst.mockResolvedValueOnce({
+      ...heldBooking(),
+      event: { ...event, deletedAt: new Date() },
+    });
     await expect(service.pay('user-id', 'booking-id')).rejects.toThrow(
       'Reservation can no longer be paid',
     );
@@ -725,7 +741,7 @@ describe('BookingsService', () => {
     expect(payments.lookup).toHaveBeenCalledWith(booking.id);
     expect(bookings.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: { status: BookingStatus.PAID },
+        data: expect.objectContaining({ status: BookingStatus.PAID }),
       }),
     );
   });

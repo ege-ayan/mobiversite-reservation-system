@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { recordBookingTransitions } from '../bookings/booking-history.js';
 import { BookingStatus, Prisma } from '../generated/prisma/client.js';
 import { WRITE_TRANSACTION } from '../prisma/transaction.js';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -65,6 +66,15 @@ export class InventoryService {
     if (updated.count !== due.length) {
       throw new Error('Expired hold set changed during release');
     }
+    await recordBookingTransitions(
+      tx,
+      due.map((row) => ({
+        bookingId: row.id,
+        fromStatus: BookingStatus.HELD,
+        toStatus: BookingStatus.EXPIRED,
+        reason: 'expired',
+      })),
+    );
 
     const quantity = due.reduce((sum, row) => sum + Number(row.quantity), 0);
     await tx.event.update({

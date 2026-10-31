@@ -25,12 +25,14 @@ import {
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
+import { ConfigService } from '@nestjs/config';
 import { HttpErrorResponse } from '../common/dto/error-response.js';
+import type { EnvironmentVariables } from '../config/env.validation.js';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { Roles } from '../auth/decorators/roles.decorator.js';
 import { Role } from '../generated/prisma/client.js';
-import { mockDeclineRequested } from '../payment/payment.client.js';
+import { mockPaymentDecision } from '../payment/payment.client.js';
 import { ApiPageQueries, PageQuery } from '../common/pagination/page-query.js';
 import { BookingsService } from './bookings.service.js';
 import { BookingThrottlerGuard } from './guards/booking-throttler.guard.js';
@@ -57,7 +59,10 @@ const forbidden = {
 @Roles(Role.CUSTOMER)
 @Controller('bookings')
 export class BookingsController {
-  constructor(private readonly bookingsService: BookingsService) {}
+  constructor(
+    private readonly bookingsService: BookingsService,
+    private readonly config: ConfigService<EnvironmentVariables, true>,
+  ) {}
 
   @Get()
   @ApiPageQueries()
@@ -139,7 +144,7 @@ export class BookingsController {
     name: 'x-mock-payment',
     required: false,
     description:
-      'Send the value "decline" to make the mock payment service refuse this attempt. The hold stays, and a later attempt can still succeed.',
+      'Outside production, decline, error, timeout, slow, or error-after-charge. Production ignores this header.',
   })
   @ApiOkResponse({ type: BookingResponse })
   @ApiNotFoundResponse({ description: 'Reservation not found' })
@@ -149,10 +154,14 @@ export class BookingsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Headers('x-mock-payment') mockPayment?: string | string[],
   ): Promise<BookingResponse> {
+    const decision = mockPaymentDecision(
+      mockPayment,
+      this.config.get('NODE_ENV', { infer: true }),
+    );
     return this.bookingsService.pay(
       user.id,
       id,
-      mockDeclineRequested(mockPayment) ? { decline: true } : undefined,
+      decision ? { decision } : undefined,
     );
   }
 }

@@ -15,9 +15,9 @@ import {
   ApiBearerAuth,
   ApiQuery,
   ApiConflictResponse,
+  ApiAcceptedResponse,
   ApiCreatedResponse,
   ApiForbiddenResponse,
-  ApiNoContentResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
@@ -28,11 +28,12 @@ import { Role } from '../generated/prisma/client.js';
 import { HttpErrorResponse } from '../common/dto/error-response.js';
 import { Roles } from '../auth/decorators/roles.decorator.js';
 import { ApiPageQueries, PageQuery } from '../common/pagination/page-query.js';
-import { BookingsService } from '../bookings/bookings.service.js';
+import { BookingQueryService } from '../bookings/booking-query.service.js';
 import { AdminBookingPage } from '../bookings/dto/admin-booking-page.js';
+import { EventCancellationResponse } from './dto/event-cancellation-response.js';
 import { EventPage } from './dto/event-page.js';
 import { EventQuery } from './dto/event-query.js';
-import { EventRequest } from './dto/event-request.js';
+import { EventRequest, EventUpdateRequest } from './dto/event-request.js';
 import { EventResponse } from './dto/event-response.js';
 import { EventsService } from './events.service.js';
 
@@ -43,7 +44,7 @@ import { EventsService } from './events.service.js';
 export class EventsController {
   constructor(
     private readonly eventsService: EventsService,
-    private readonly bookingsService: BookingsService,
+    private readonly bookings: BookingQueryService,
   ) {}
 
   @Get()
@@ -81,7 +82,7 @@ export class EventsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Query() query: PageQuery,
   ): Promise<AdminBookingPage> {
-    return this.bookingsService.listForEvent(id, query);
+    return this.bookings.listForEvent(id, query);
   }
 
   @Get(':id')
@@ -119,20 +120,23 @@ export class EventsController {
   })
   update(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() body: EventRequest,
+    @Body() body: EventUpdateRequest,
   ): Promise<EventResponse> {
     return this.eventsService.update(id, body);
   }
 
   @Delete(':id')
   @Roles(Role.ADMIN)
-  @HttpCode(HttpStatus.NO_CONTENT)
+  @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
-    summary: 'Refund paid reservations, cancel holds, then hide the event',
+    summary:
+      'Close sales and refund reservations in the background, then hide the event',
   })
-  @ApiNoContentResponse()
+  @ApiAcceptedResponse({ type: EventCancellationResponse })
   @ApiNotFoundResponse({ description: 'Event not found' })
-  remove(@Param('id', ParseUUIDPipe) id: string): Promise<void> {
+  remove(
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<EventCancellationResponse> {
     return this.eventsService.remove(id);
   }
 }

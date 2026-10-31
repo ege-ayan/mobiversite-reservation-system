@@ -6,7 +6,8 @@ import { App } from 'supertest/types.js';
 import { AppModule } from '../src/app.module.js';
 import { BookingsService } from '../src/bookings/bookings.service.js';
 import { PAYMENT_GATEWAY } from '../src/payment/payment.client.js';
-import { SWEEP_LOCK_NAME } from '../src/bookings/sweep-lock.js';
+import { SWEEP_LOCK_NAME } from '../src/common/locking/mysql-lock.js';
+import { EventCancellationService } from '../src/events/event-cancellation.service.js';
 import { configureApp } from '../src/config/app.config.js';
 import { Role } from '../src/generated/prisma/client.js';
 import { PrismaService } from '../src/prisma/prisma.service.js';
@@ -40,11 +41,17 @@ describe('Reservations (e2e)', () => {
     await prisma.paymentAttempt.deleteMany({
       where: { booking: { event: { title: { startsWith: 'test-event-' } } } },
     });
+    await prisma.bookingEvent.deleteMany({
+      where: { booking: { event: { title: { startsWith: 'test-event-' } } } },
+    });
     await prisma.booking.deleteMany({
       where: { event: { title: { startsWith: 'test-event-' } } },
     });
     await prisma.event.deleteMany({
       where: { title: { startsWith: 'test-event-' } },
+    });
+    await prisma.refreshToken.deleteMany({
+      where: { user: { email: { endsWith: '@example.test' } } },
     });
     await prisma.user.deleteMany({
       where: { email: { endsWith: '@example.test' } },
@@ -57,16 +64,19 @@ describe('Reservations (e2e)', () => {
     const customer = await loginAs(app, Role.CUSTOMER);
     const body = eventBody();
 
-    await request(app.getHttpServer()).post('/events').send(body).expect(401);
+    await request(app.getHttpServer())
+      .post('/api/v1/events')
+      .send(body)
+      .expect(401);
 
     await request(app.getHttpServer())
-      .post('/events')
+      .post('/api/v1/events')
       .set(bearer(customer.token))
       .send(body)
       .expect(403);
 
     const created = await request(app.getHttpServer())
-      .post('/events')
+      .post('/api/v1/events')
       .set(bearer(admin.token))
       .send(body)
       .expect(201);
@@ -80,7 +90,7 @@ describe('Reservations (e2e)', () => {
       totalTickets: 8,
     });
     const updated = await request(app.getHttpServer())
-      .put(`/events/${created.body.id}`)
+      .put(`/api/v1/events/${created.body.id}`)
       .set(bearer(admin.token))
       .send(replacement)
       .expect(200);
@@ -89,7 +99,7 @@ describe('Reservations (e2e)', () => {
     expect(updated.body.totalTickets).toBe(8);
 
     const listed = await request(app.getHttpServer())
-      .get('/events')
+      .get('/api/v1/events')
       .set(bearer(customer.token))
       .expect(200);
 
@@ -99,20 +109,40 @@ describe('Reservations (e2e)', () => {
       ]),
     );
 
+    const adminView = await request(app.getHttpServer())
+      .get(`/api/v1/admin/events/${created.body.id}`)
+      .set(bearer(admin.token))
+      .expect(200);
+    expect(adminView.body).toMatchObject({
+      status: 'ON_SALE',
+      paidRevenue: '0.00',
+      heldTickets: 0,
+    });
     await request(app.getHttpServer())
-      .delete(`/events/${created.body.id}`)
+      .get('/api/v1/admin/events')
       .set(bearer(customer.token))
       .expect(403);
 
     await request(app.getHttpServer())
-      .delete(`/events/${created.body.id}`)
-      .set(bearer(admin.token))
-      .expect(204);
+      .delete(`/api/v1/events/${created.body.id}`)
+      .set(bearer(customer.token))
+      .expect(403);
 
     await request(app.getHttpServer())
-      .get(`/events/${created.body.id}`)
+      .delete(`/api/v1/events/${created.body.id}`)
+      .set(bearer(admin.token))
+      .expect(202);
+    await app.get(EventCancellationService).processOne(created.body.id);
+
+    await request(app.getHttpServer())
+      .get(`/api/v1/events/${created.body.id}`)
       .set(bearer(customer.token))
       .expect(404);
+    const hidden = await request(app.getHttpServer())
+      .get(`/api/v1/admin/events/${created.body.id}`)
+      .set(bearer(admin.token))
+      .expect(200);
+    expect(hidden.body.status).toBe('DELETED');
   });
 
   it('holds tickets, confirms payment, and returns them on cancel', async () => {
@@ -125,13 +155,13 @@ describe('Reservations (e2e)', () => {
     );
 
     await request(app.getHttpServer())
-      .post('/bookings')
+      .post('/api/v1/bookings')
       .set(bearer(admin.token))
       .send({ eventId: event.id, quantity: 1 })
       .expect(403);
 
     const reserved = await request(app.getHttpServer())
-      .post('/bookings')
+      .post('/api/v1/bookings')
       .set(bearer(customer.token))
       .send({ eventId: event.id, quantity: 1 })
       .expect(201);
@@ -140,13 +170,13 @@ describe('Reservations (e2e)', () => {
     expect(reserved.body.event.availableTickets).toBe(1);
 
     const mine = await request(app.getHttpServer())
-      .get('/bookings')
+      .get('/api/v1/bookings')
       .set(bearer(customer.token))
       .expect(200);
     expect(mine.body.items).toHaveLength(1);
 
     const paid = await request(app.getHttpServer())
-      .post(`/bookings/${reserved.body.id}/payment`)
+      .post(`/api/v1/bookings/${reserved.body.id}/payment`)
       .set(bearer(customer.token))
       .expect(200);
 
@@ -155,11 +185,11 @@ describe('Reservations (e2e)', () => {
       bookingId: reserved.body.id,
       amount: '25.00',
       idempotencyKey: reserved.body.id,
-      decline: undefined,
+      decision: undefined,
     });
 
     const cancelled = await request(app.getHttpServer())
-      .post(`/bookings/${reserved.body.id}/cancel`)
+      .post(`/api/v1/bookings/${reserved.body.id}/cancel`)
       .set(bearer(customer.token))
       .expect(200);
 
@@ -167,13 +197,13 @@ describe('Reservations (e2e)', () => {
     expect(cancelled.body.event.availableTickets).toBe(2);
 
     const one = await request(app.getHttpServer())
-      .get(`/bookings/${reserved.body.id}`)
+      .get(`/api/v1/bookings/${reserved.body.id}`)
       .set(bearer(customer.token))
       .expect(200);
     expect(one.body.status).toBe('REFUNDED');
 
     const forAdmin = await request(app.getHttpServer())
-      .get(`/events/${event.id}/bookings`)
+      .get(`/api/v1/events/${event.id}/bookings`)
       .set(bearer(admin.token))
       .expect(200);
     expect(forAdmin.body.items).toEqual([
@@ -183,12 +213,12 @@ describe('Reservations (e2e)', () => {
       }),
     ]);
     await request(app.getHttpServer())
-      .get(`/events/${event.id}/bookings`)
+      .get(`/api/v1/events/${event.id}/bookings`)
       .set(bearer(customer.token))
       .expect(403);
 
     await request(app.getHttpServer())
-      .post(`/bookings/${reserved.body.id}/cancel`)
+      .post(`/api/v1/bookings/${reserved.body.id}/cancel`)
       .set(bearer(admin.token))
       .expect(403);
   });
@@ -202,14 +232,14 @@ describe('Reservations (e2e)', () => {
       eventBody({ totalTickets: 1 }),
     );
     const reserved = await request(app.getHttpServer())
-      .post('/bookings')
+      .post('/api/v1/bookings')
       .set(bearer(customer.token))
       .send({ eventId: event.id, quantity: 1 })
       .expect(201);
 
     payments.confirm.mockResolvedValue(false);
     const declined = await request(app.getHttpServer())
-      .post(`/bookings/${reserved.body.id}/payment`)
+      .post(`/api/v1/bookings/${reserved.body.id}/payment`)
       .set(bearer(customer.token))
       .expect(409);
 
@@ -235,7 +265,7 @@ describe('Reservations (e2e)', () => {
     const attempts = await Promise.all(
       customers.map((customer) =>
         request(app.getHttpServer())
-          .post('/bookings')
+          .post('/api/v1/bookings')
           .set(bearer(customer.token))
           .send({ eventId: event.id, quantity: 1 }),
       ),
@@ -261,7 +291,7 @@ describe('Reservations (e2e)', () => {
       eventBody({ totalTickets: 1 }),
     );
     const reserved = await request(app.getHttpServer())
-      .post('/bookings')
+      .post('/api/v1/bookings')
       .set(bearer(customer.token))
       .send({ eventId: event.id, quantity: 1 })
       .expect(201);
@@ -282,9 +312,10 @@ describe('Reservations (e2e)', () => {
     expect(stored.event.availableTickets).toBe(1);
 
     await request(app.getHttpServer())
-      .delete(`/events/${event.id}`)
+      .delete(`/api/v1/events/${event.id}`)
       .set(bearer(admin.token))
-      .expect(204);
+      .expect(202);
+    await app.get(EventCancellationService).processOne(event.id);
 
     const afterDelete = await app.get(PrismaService).booking.findUniqueOrThrow({
       where: { id: reserved.body.id },
@@ -294,7 +325,7 @@ describe('Reservations (e2e)', () => {
     expect(afterDelete.event.availableTickets).toBe(1);
     expect(afterDelete.event.deletedAt).not.toBeNull();
     await request(app.getHttpServer())
-      .get(`/events/${event.id}`)
+      .get(`/api/v1/events/${event.id}`)
       .set(bearer(customer.token))
       .expect(404);
   });
@@ -308,18 +339,18 @@ describe('Reservations (e2e)', () => {
       eventBody({ totalTickets: 1 }),
     );
     const reserved = await request(app.getHttpServer())
-      .post('/bookings')
+      .post('/api/v1/bookings')
       .set(bearer(customer.token))
       .send({ eventId: event.id, quantity: 1 })
       .expect(201);
     await expire(app, reserved.body.id);
 
     const listed = await request(app.getHttpServer())
-      .get('/bookings')
+      .get('/api/v1/bookings')
       .set(bearer(customer.token))
       .expect(200);
     const catalog = await request(app.getHttpServer())
-      .get(`/events/${event.id}`)
+      .get(`/api/v1/events/${event.id}`)
       .set(bearer(customer.token))
       .expect(200);
     const stored = await app.get(PrismaService).booking.findUniqueOrThrow({
@@ -341,14 +372,14 @@ describe('Reservations (e2e)', () => {
       eventBody({ totalTickets: 1 }),
     );
     const reserved = await request(app.getHttpServer())
-      .post('/bookings')
+      .post('/api/v1/bookings')
       .set(bearer(first.token))
       .send({ eventId: event.id, quantity: 1 })
       .expect(201);
     await expire(app, reserved.body.id);
 
     const taken = await request(app.getHttpServer())
-      .post('/bookings')
+      .post('/api/v1/bookings')
       .set(bearer(second.token))
       .send({ eventId: event.id, quantity: 1 })
       .expect(201);
@@ -372,20 +403,20 @@ describe('Reservations (e2e)', () => {
       eventBody({ totalTickets: 2 }),
     );
     const reserved = await request(app.getHttpServer())
-      .post('/bookings')
+      .post('/api/v1/bookings')
       .set(bearer(customer.token))
       .send({ eventId: event.id, quantity: 1 })
       .expect(201);
     await expire(app, reserved.body.id);
 
     await request(app.getHttpServer())
-      .post('/bookings')
+      .post('/api/v1/bookings')
       .set(bearer(customer.token))
       .send({ eventId: event.id, quantity: 3 })
       .expect(409);
 
     const retry = await request(app.getHttpServer())
-      .post('/bookings')
+      .post('/api/v1/bookings')
       .set(bearer(customer.token))
       .send({ eventId: event.id, quantity: 2 })
       .expect(201);
@@ -407,19 +438,19 @@ describe('Reservations (e2e)', () => {
       eventBody({ totalTickets: 2 }),
     );
     const heldForPayment = await request(app.getHttpServer())
-      .post('/bookings')
+      .post('/api/v1/bookings')
       .set(bearer(payer.token))
       .send({ eventId: event.id, quantity: 1 })
       .expect(201);
     const heldForCancel = await request(app.getHttpServer())
-      .post('/bookings')
+      .post('/api/v1/bookings')
       .set(bearer(canceller.token))
       .send({ eventId: event.id, quantity: 1 })
       .expect(201);
     await expire(app, heldForPayment.body.id);
 
     const unpaid = await request(app.getHttpServer())
-      .post(`/bookings/${heldForPayment.body.id}/payment`)
+      .post(`/api/v1/bookings/${heldForPayment.body.id}/payment`)
       .set(bearer(payer.token))
       .expect(409);
     expect(unpaid.body.message).toBe('Reservation expired');
@@ -427,7 +458,7 @@ describe('Reservations (e2e)', () => {
 
     await expire(app, heldForCancel.body.id);
     const cancelled = await request(app.getHttpServer())
-      .post(`/bookings/${heldForCancel.body.id}/cancel`)
+      .post(`/api/v1/bookings/${heldForCancel.body.id}/cancel`)
       .set(bearer(canceller.token))
       .expect(409);
     expect(cancelled.body.message).toBe(
@@ -458,7 +489,7 @@ describe('Reservations (e2e)', () => {
     const held = await Promise.all(
       [first, second].map((customer) =>
         request(app.getHttpServer())
-          .post('/bookings')
+          .post('/api/v1/bookings')
           .set(bearer(customer.token))
           .send({
             eventId: event.id,
@@ -468,7 +499,7 @@ describe('Reservations (e2e)', () => {
       ),
     );
     const other = await request(app.getHttpServer())
-      .post('/bookings')
+      .post('/api/v1/bookings')
       .set(bearer(first.token))
       .send({ eventId: untouched.id, quantity: 1 })
       .expect(201);
@@ -498,7 +529,7 @@ describe('Reservations (e2e)', () => {
       eventBody({ totalTickets: 1 }),
     );
     const reserved = await request(app.getHttpServer())
-      .post('/bookings')
+      .post('/api/v1/bookings')
       .set(bearer(holder.token))
       .send({ eventId: event.id, quantity: 1 })
       .expect(201);
@@ -510,7 +541,7 @@ describe('Reservations (e2e)', () => {
     const attempts = await Promise.all(
       buyers.map((buyer) =>
         request(app.getHttpServer())
-          .post('/bookings')
+          .post('/api/v1/bookings')
           .set(bearer(buyer.token))
           .send({ eventId: event.id, quantity: 1 }),
       ),
@@ -566,7 +597,7 @@ describe('Reservations (e2e)', () => {
       eventBody({ totalTickets: 1 }),
     );
     const reserved = await request(app.getHttpServer())
-      .post('/bookings')
+      .post('/api/v1/bookings')
       .set(bearer(customer.token))
       .send({ eventId: event.id, quantity: 1 })
       .expect(201);
@@ -627,7 +658,7 @@ describe('Reservations (e2e)', () => {
       eventBody({ totalTickets: 1 }),
     );
     const reserved = await request(app.getHttpServer())
-      .post('/bookings')
+      .post('/api/v1/bookings')
       .set(bearer(customer.token))
       .send({ eventId: event.id, quantity: 1 })
       .expect(201);
@@ -639,7 +670,7 @@ describe('Reservations (e2e)', () => {
     });
 
     const response = await request(app.getHttpServer())
-      .post(`/bookings/${reserved.body.id}/payment`)
+      .post(`/api/v1/bookings/${reserved.body.id}/payment`)
       .set(bearer(customer.token))
       .expect(409);
 
@@ -661,17 +692,17 @@ describe('Reservations (e2e)', () => {
       eventBody({ totalTickets: 1 }),
     );
     const reserved = await request(app.getHttpServer())
-      .post('/bookings')
+      .post('/api/v1/bookings')
       .set(bearer(customer.token))
       .send({ eventId: event.id, quantity: 1 })
       .expect(201);
 
     const [paid, cancelled] = await Promise.all([
       request(app.getHttpServer())
-        .post(`/bookings/${reserved.body.id}/payment`)
+        .post(`/api/v1/bookings/${reserved.body.id}/payment`)
         .set(bearer(customer.token)),
       request(app.getHttpServer())
-        .post(`/bookings/${reserved.body.id}/cancel`)
+        .post(`/api/v1/bookings/${reserved.body.id}/cancel`)
         .set(bearer(customer.token)),
     ]);
 
@@ -699,7 +730,7 @@ describe('Reservations (e2e)', () => {
       eventBody({ totalTickets: 2 }),
     );
     const reserved = await request(app.getHttpServer())
-      .post('/bookings')
+      .post('/api/v1/bookings')
       .set(bearer(customer.token))
       .send({ eventId: event.id, quantity: 2 })
       .expect(201);
@@ -729,27 +760,28 @@ describe('Reservations (e2e)', () => {
       eventBody({ totalTickets: 4 }),
     );
     const held = await request(app.getHttpServer())
-      .post('/bookings')
+      .post('/api/v1/bookings')
       .set(bearer(holder.token))
       .send({ eventId: event.id, quantity: 1 })
       .expect(201);
     const paid = await request(app.getHttpServer())
-      .post('/bookings')
+      .post('/api/v1/bookings')
       .set(bearer(buyer.token))
       .send({ eventId: event.id, quantity: 1 })
       .expect(201);
     await request(app.getHttpServer())
-      .post(`/bookings/${paid.body.id}/payment`)
+      .post(`/api/v1/bookings/${paid.body.id}/payment`)
       .set(bearer(buyer.token))
       .expect(200);
     await expire(app, held.body.id);
 
     await request(app.getHttpServer())
-      .delete(`/events/${event.id}`)
+      .delete(`/api/v1/events/${event.id}`)
       .set(bearer(admin.token))
-      .expect(204);
+      .expect(202);
+    await app.get(EventCancellationService).processOne(event.id);
     await request(app.getHttpServer())
-      .delete(`/events/${event.id}`)
+      .delete(`/api/v1/events/${event.id}`)
       .set(bearer(admin.token))
       .expect(404);
 
@@ -765,7 +797,7 @@ describe('Reservations (e2e)', () => {
     expect(storedEvent.availableTickets).toBe(4);
 
     const audit = await request(app.getHttpServer())
-      .get(`/events/${event.id}/bookings`)
+      .get(`/api/v1/events/${event.id}/bookings`)
       .set(bearer(admin.token))
       .expect(200);
     expect(audit.body.items.map((item: { id: string }) => item.id)).toEqual(
@@ -773,7 +805,7 @@ describe('Reservations (e2e)', () => {
     );
 
     const catalog = await request(app.getHttpServer())
-      .get('/events')
+      .get('/api/v1/events')
       .query({ limit: 100 })
       .set(bearer(holder.token))
       .expect(200);
@@ -782,7 +814,7 @@ describe('Reservations (e2e)', () => {
     ).not.toContain(event.id);
 
     const mine = await request(app.getHttpServer())
-      .get('/bookings')
+      .get('/api/v1/bookings')
       .set(bearer(holder.token))
       .expect(200);
     expect(mine.body.items).toEqual([
@@ -790,12 +822,12 @@ describe('Reservations (e2e)', () => {
     ]);
 
     await request(app.getHttpServer())
-      .post('/bookings')
+      .post('/api/v1/bookings')
       .set(bearer(holder.token))
       .send({ eventId: event.id, quantity: 1 })
       .expect(404);
     await request(app.getHttpServer())
-      .post(`/bookings/${paid.body.id}/payment`)
+      .post(`/api/v1/bookings/${paid.body.id}/payment`)
       .set(bearer(buyer.token))
       .expect(409);
   });
@@ -829,7 +861,7 @@ describe('Reservations (e2e)', () => {
     };
     for (let page = 0; page < 3; page += 1) {
       const response = await request(app.getHttpServer())
-        .get('/events')
+        .get('/api/v1/events')
         .query({ limit: 1, ...window, ...(cursor ? { cursor } : {}) })
         .set(bearer(customer.token))
         .expect(200);
@@ -842,12 +874,12 @@ describe('Reservations (e2e)', () => {
     expect(cursor).toBeNull();
 
     await request(app.getHttpServer())
-      .get('/events')
+      .get('/api/v1/events')
       .query({ cursor: 'not-a-cursor' })
       .set(bearer(customer.token))
       .expect(400);
     await request(app.getHttpServer())
-      .get('/events')
+      .get('/api/v1/events')
       .query({ limit: 101 })
       .set(bearer(customer.token))
       .expect(400);
@@ -865,7 +897,7 @@ describe('Reservations (e2e)', () => {
     ]) {
       const event = await createEvent(app, admin.token, eventBody());
       const reserved = await request(app.getHttpServer())
-        .post('/bookings')
+        .post('/api/v1/bookings')
         .set(bearer(customer.token))
         .send({ eventId: event.id, quantity: 1 })
         .expect(201);
@@ -877,13 +909,13 @@ describe('Reservations (e2e)', () => {
     }
     const otherEvent = await createEvent(app, admin.token, eventBody());
     await request(app.getHttpServer())
-      .post('/bookings')
+      .post('/api/v1/bookings')
       .set(bearer(other.token))
       .send({ eventId: otherEvent.id, quantity: 1 })
       .expect(201);
 
     const first = await request(app.getHttpServer())
-      .get('/bookings')
+      .get('/api/v1/bookings')
       .query({ limit: 2 })
       .set(bearer(customer.token))
       .expect(200);
@@ -894,7 +926,7 @@ describe('Reservations (e2e)', () => {
     expect(first.body.nextCursor).toEqual(expect.any(String));
 
     const second = await request(app.getHttpServer())
-      .get('/bookings')
+      .get('/api/v1/bookings')
       .query({ limit: 2, cursor: first.body.nextCursor })
       .set(bearer(customer.token))
       .expect(200);
@@ -917,7 +949,7 @@ describe('Reservations (e2e)', () => {
     const body = { eventId: event.id, quantity: 1 };
 
     const first = await request(app.getHttpServer())
-      .post('/bookings')
+      .post('/api/v1/bookings')
       .set(bearer(customer.token))
       .set('Idempotency-Key', key)
       .send(body)
@@ -926,7 +958,7 @@ describe('Reservations (e2e)', () => {
     const repeated = await Promise.all(
       Array.from({ length: 2 }, () =>
         request(app.getHttpServer())
-          .post('/bookings')
+          .post('/api/v1/bookings')
           .set(bearer(customer.token))
           .set('Idempotency-Key', key)
           .send(body),
@@ -939,7 +971,7 @@ describe('Reservations (e2e)', () => {
     ]);
 
     const conflict = await request(app.getHttpServer())
-      .post('/bookings')
+      .post('/api/v1/bookings')
       .set(bearer(customer.token))
       .set('Idempotency-Key', key)
       .send({ eventId: event.id, quantity: 2 })
@@ -949,7 +981,7 @@ describe('Reservations (e2e)', () => {
     );
 
     const separate = await request(app.getHttpServer())
-      .post('/bookings')
+      .post('/api/v1/bookings')
       .set(bearer(other.token))
       .set('Idempotency-Key', key)
       .send(body)
@@ -957,13 +989,13 @@ describe('Reservations (e2e)', () => {
     expect(separate.body.id).not.toBe(first.body.id);
 
     const listed = await request(app.getHttpServer())
-      .get(`/events/${event.id}`)
+      .get(`/api/v1/events/${event.id}`)
       .set(bearer(customer.token))
       .expect(200);
     expect(listed.body.availableTickets).toBe(2);
 
     await request(app.getHttpServer())
-      .post('/bookings')
+      .post('/api/v1/bookings')
       .set(bearer(customer.token))
       .set('Idempotency-Key', 'has space')
       .send(body)
@@ -974,17 +1006,17 @@ describe('Reservations (e2e)', () => {
     const admin = await loginAs(app, Role.ADMIN);
 
     await request(app.getHttpServer())
-      .post('/events')
+      .post('/api/v1/events')
       .set(bearer(admin.token))
       .send(eventBody({ startsAt: '2020-01-01T00:00:00.000Z' }))
       .expect(400);
     await request(app.getHttpServer())
-      .post('/events')
+      .post('/api/v1/events')
       .set(bearer(admin.token))
       .send(eventBody({ totalTickets: 2_147_483_648 }))
       .expect(400);
     await request(app.getHttpServer())
-      .post('/events')
+      .post('/api/v1/events')
       .set(bearer(admin.token))
       .send(eventBody({ ticketPrice: 100_000_000 }))
       .expect(400);
@@ -999,7 +1031,7 @@ describe('Reservations (e2e)', () => {
       eventBody({ totalTickets: 2 }),
     );
     const reserved = await request(app.getHttpServer())
-      .post('/bookings')
+      .post('/api/v1/bookings')
       .set(bearer(customer.token))
       .send({ eventId: event.id, quantity: 1 })
       .expect(201);
@@ -1027,12 +1059,12 @@ describe('Reservations (e2e)', () => {
     );
 
     await request(app.getHttpServer())
-      .post('/bookings')
+      .post('/api/v1/bookings')
       .set(bearer(first.token))
       .send({ eventId: event.id, quantity: 10 })
       .expect(201);
     const blocked = await request(app.getHttpServer())
-      .post('/bookings')
+      .post('/api/v1/bookings')
       .set(bearer(first.token))
       .send({ eventId: event.id, quantity: 1 })
       .expect(409);
@@ -1041,7 +1073,7 @@ describe('Reservations (e2e)', () => {
     );
 
     const other = await request(app.getHttpServer())
-      .post('/bookings')
+      .post('/api/v1/bookings')
       .set(bearer(second.token))
       .send({ eventId: event.id, quantity: 1 })
       .expect(201);
@@ -1059,7 +1091,7 @@ describe('Reservations (e2e)', () => {
     );
 
     const reserved = await request(app.getHttpServer())
-      .post('/bookings')
+      .post('/api/v1/bookings')
       .set(bearer(customer.token))
       .send({ eventId: event.id, quantity: 1 })
       .expect(201);
@@ -1080,7 +1112,7 @@ describe('Reservations (e2e)', () => {
     });
 
     const listed = await request(app.getHttpServer())
-      .get('/events')
+      .get('/api/v1/events')
       .query({ limit: 100 })
       .set(bearer(customer.token))
       .expect(200);
@@ -1089,7 +1121,7 @@ describe('Reservations (e2e)', () => {
     expect(ids).not.toContain(past.id);
 
     const ranged = await request(app.getHttpServer())
-      .get('/events')
+      .get('/api/v1/events')
       .query({
         limit: 100,
         from: '2019-01-01T00:00:00.000Z',
@@ -1125,7 +1157,7 @@ async function createEvent(
   body: ReturnType<typeof eventBody>,
 ) {
   const response = await request(app.getHttpServer())
-    .post('/events')
+    .post('/api/v1/events')
     .set(bearer(token))
     .send(body)
     .expect(201);
@@ -1135,6 +1167,9 @@ async function createEvent(
 async function clearCatalog(app: INestApplication<App>) {
   const prisma = app.get(PrismaService);
   await prisma.paymentAttempt.deleteMany({
+    where: { booking: { event: { title: { startsWith: 'test-event-' } } } },
+  });
+  await prisma.bookingEvent.deleteMany({
     where: { booking: { event: { title: { startsWith: 'test-event-' } } } },
   });
   await prisma.booking.deleteMany({
@@ -1163,7 +1198,7 @@ async function loginAs(app: INestApplication<App>, role: Role) {
     },
   });
   const response = await request(app.getHttpServer())
-    .post('/auth/login')
+    .post('/api/v1/auth/login')
     .send({ email, password })
     .expect(200);
   return { token: response.body.accessToken as string, email };

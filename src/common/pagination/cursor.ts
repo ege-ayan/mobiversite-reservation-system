@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { badRequest } from '../errors/app.exception.js';
 
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -29,7 +29,7 @@ export function decodeCursor(value: string): PageCursor {
     }
     return { at, id: parsed.id };
   } catch {
-    throw new BadRequestException('Invalid cursor');
+    throw badRequest('Invalid cursor', 'INVALID_CURSOR');
   }
 }
 

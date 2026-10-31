@@ -1,10 +1,19 @@
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
-import { EventRequest } from './event-request.js';
+import { EventRequest, EventUpdateRequest } from './event-request.js';
 
 describe('EventRequest', () => {
   it('accepts an event that can be stored', async () => {
     const request = plainToInstance(EventRequest, body());
+
+    await expect(validate(request)).resolves.toEqual([]);
+  });
+
+  it('lets an update keep a start time that is already in the past', async () => {
+    const request = plainToInstance(
+      EventUpdateRequest,
+      body({ startsAt: '2020-01-01T00:00:00.000Z' }),
+    );
 
     await expect(validate(request)).resolves.toEqual([]);
   });

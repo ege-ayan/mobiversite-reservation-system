@@ -6,15 +6,17 @@ The fastest way to run the whole system is Docker. The sections below also cover
 
 ## What you get after startup
 
-| Surface              | URL                             |
-| -------------------- | ------------------------------- |
-| API                  | http://localhost:3000           |
-| OpenAPI UI           | http://localhost:3000/docs      |
-| OpenAPI JSON         | http://localhost:3000/docs-json |
-| Health check         | http://localhost:3000/health    |
-| Mock payment service | http://localhost:4000/payments  |
+| Surface              | URL                                |
+| -------------------- | ---------------------------------- |
+| API                  | http://localhost:3000/api/v1       |
+| OpenAPI UI           | http://localhost:3000/docs         |
+| OpenAPI JSON         | http://localhost:3000/docs-json    |
+| Health check         | http://localhost:3000/health       |
+| Liveness             | http://localhost:3000/health/live  |
+| Readiness            | http://localhost:3000/health/ready |
+| Mock payment service | http://localhost:4000/payments     |
 
-The API container applies database migrations and then seeds an administrator plus one sample event.
+A one-shot `migrate` container applies database migrations and seeds an administrator plus one sample event. The API starts after that job finishes. HTTP routes live under `/api/v1`. Health and `/docs` stay at the root.
 
 | Account  | Value                     |
 | -------- | ------------------------- |
@@ -22,7 +24,7 @@ The API container applies database migrations and then seeds an administrator pl
 | Password | `change-me-admin`         |
 | Role     | `ADMIN`                   |
 
-`POST /auth/register` always creates a `CUSTOMER`. There is no public way to register an administrator. Change the seeded admin with the `ADMIN_EMAIL` and `ADMIN_PASSWORD` environment variables before the first start, or update `users.role` in MySQL afterwards.
+`POST /api/v1/auth/register` always creates a `CUSTOMER`. There is no public way to register an administrator. Change the seeded admin with the `ADMIN_EMAIL` and `ADMIN_PASSWORD` environment variables before the first start, or update `users.role` in MySQL afterwards.
 
 The seeded event is **Mobiversite Live**, 1 June 2027, 100 tickets at `25.00`.
 
@@ -38,11 +40,11 @@ The seeded event is **Mobiversite Live**, 1 June 2027, 100 tickets at `25.00`.
 | Auth            | Passport JWT, `bcryptjs` (12 rounds)                      | Stateless API. The password hash is never returned.                                                                      |
 | Validation      | `class-validator` on inputs, Zod on environment variables | Bad bodies become 400 before they reach a service. The process refuses to boot when required configuration is missing.   |
 | API docs        | OpenAPI via `@nestjs/swagger` at `/docs`                  | Every route, status, and example is generated from the controllers.                                                      |
-| Jobs            | `@nestjs/schedule`                                        | One cron releases expired holds and reconciles payment attempts that were left unfinished.                  |
+| Jobs            | `@nestjs/schedule`                                        | Three independent minute jobs: expired holds, unfinished payments, and event cancellations.                              |
 | Rate limit      | `@nestjs/throttler`, memory or Redis                      | `RATE_LIMIT_STORE` selects the counter. Redis shares login and register limits across API instances.                     |
 | Tests           | Vitest and Supertest                                      | Unit tests mock the database. End-to-end tests run against MySQL.                                                        |
 | Lint and format | oxlint, Prettier                                          | `npm run ci` typechecks, lints, checks formatting, and runs unit tests.                                                  |
-| Packaging       | Multi-stage Docker image, Compose, GHCR                   | One command starts the API, MySQL, Redis, and the mock payment service. A `v*` tag publishes the image.                   |
+| Packaging       | Multi-stage Docker image, Compose, GHCR                   | One command starts the API, MySQL, Redis, and the mock payment service. A `v*` tag publishes the image.                  |
 
 ## Requirements
 
@@ -77,7 +79,7 @@ From the repository root:
 docker compose up --build
 ```
 
-The first build installs dependencies and compiles TypeScript. Later starts reuse the image until the source changes. Compose waits until MySQL, Redis, and the payment mock are healthy, then the API runs migrations, seeds the admin and the sample event, and listens on port 3000.
+The first build installs dependencies and compiles TypeScript. Later starts reuse the image until the source changes. Compose waits until MySQL is healthy, then a `migrate` job applies migrations and seeds the admin and the sample event. The API starts after that job, Redis, and the payment mock are ready, and listens on port 3000.
 
 The API container sets `RATE_LIMIT_STORE=redis`, so every replica shares one login counter. A process started with `npm run start:dev` keeps the in-process counter unless `.env` points it at Redis.
 
@@ -106,7 +108,7 @@ A healthy process returns `{"status":"ok"}`. That check also runs `SELECT 1` aga
 Log in as the seeded administrator:
 
 ```bash
-curl -s -X POST http://localhost:3000/auth/login \
+curl -s -X POST http://localhost:3000/api/v1/auth/login \
   -H 'content-type: application/json' \
   -d '{"email":"admin@mobiversite.local","password":"change-me-admin"}'
 ```
@@ -114,7 +116,7 @@ curl -s -X POST http://localhost:3000/auth/login \
 Copy `accessToken` from the JSON and call a protected route:
 
 ```bash
-curl http://localhost:3000/auth/me \
+curl http://localhost:3000/api/v1/auth/me \
   -H "authorization: Bearer PASTE_THE_TOKEN"
 ```
 
@@ -133,7 +135,7 @@ curl.exe http://localhost:3000/health
 Login in PowerShell. A single-quoted JSON string is literal in PowerShell, which is what the request body needs:
 
 ```powershell
-curl.exe -s -X POST http://localhost:3000/auth/login `
+curl.exe -s -X POST http://localhost:3000/api/v1/auth/login `
   -H "content-type: application/json" `
   -d '{"email":"admin@mobiversite.local","password":"change-me-admin"}'
 ```
@@ -141,7 +143,7 @@ curl.exe -s -X POST http://localhost:3000/auth/login `
 Login in Command Prompt. Use a caret for line continuation, and escape the quotes inside JSON:
 
 ```bat
-curl.exe -s -X POST http://localhost:3000/auth/login ^
+curl.exe -s -X POST http://localhost:3000/api/v1/auth/login ^
   -H "content-type: application/json" ^
   -d "{\"email\":\"admin@mobiversite.local\",\"password\":\"change-me-admin\"}"
 ```
@@ -152,12 +154,13 @@ If port 3000, 3306, or 4000 is already taken, stop the other process or change t
 
 ### What the containers do
 
-| Service   | Image                                             | Role                                                                                                        |
-| --------- | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `api`     | Built from the `Dockerfile`                       | NestJS process. On start it runs `prisma migrate deploy`, then `prisma/seed.mjs`, then `node dist/main.js`. |
-| `mysql`   | `mysql:8.4`                                        | Database `mobiversite`, user `mobiversite`, password `mobiversite`, root password `root`.                    |
-| `payment` | `node:26-alpine` running `mock-payment/server.mjs` | Always-on stand-in for the payment provider.                                                                 |
-| `redis`   | `redis:7-alpine`                                   | Shared login and booking rate-limit counters when `RATE_LIMIT_STORE=redis`.                                 |
+| Service   | Image                                              | Role                                                                                               |
+| --------- | -------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `migrate` | Same image as `api`                                | Runs once: `prisma migrate deploy`, then `prisma/seed.mjs`. The API waits until this job succeeds. |
+| `api`     | Built from the `Dockerfile`                        | NestJS process. The image entrypoint is `node dist/main.js`.                                       |
+| `mysql`   | `mysql:8.4`                                        | Database `mobiversite`, user `mobiversite`, password `mobiversite`, root password `root`.          |
+| `payment` | `node:26-alpine` running `mock-payment/server.mjs` | Always-on stand-in for the payment provider.                                                       |
+| `redis`   | `redis:7-alpine`                                   | Shared login and booking rate-limit counters when `RATE_LIMIT_STORE=redis`.                        |
 
 The API image is built in two stages. The first installs every dependency, generates the Prisma client, and compiles to `dist`. The second installs production dependencies only, copies `dist` and `prisma`, and runs as the `node` user.
 
@@ -217,24 +220,26 @@ On Windows the same four npm commands work in PowerShell and Command Prompt. `np
 
 ### Environment variables
 
-| Variable                 | Required | Default                   | Meaning                                                                                                       |
-| ------------------------ | -------- | ------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `NODE_ENV`               | no       | `development`             | `development`, `test`, or `production`. Production rejects a short `JWT_SECRET`.                              |
-| `PORT`                   | no       | `3000`                    | HTTP port.                                                                                                    |
-| `DATABASE_URL`           | yes      |                           | MySQL URL, for example `mysql://mobiversite:mobiversite@localhost:3306/mobiversite`.                          |
-| `JWT_SECRET`             | yes      |                           | HMAC secret for access tokens.                                                                                |
-| `JWT_EXPIRES_IN_SECONDS` | no       | `86400`                   | Access token lifetime. One day.                                                                               |
-| `PAYMENT_SERVICE_URL`    | yes      |                           | Origin of the payment service, for example `http://localhost:4000`. A URL that already ends in `/payments` is accepted. Charges go to `/payments`, refunds to `/refunds`, and lookups to `/payments/:key`. |
-| `RESERVATION_HOLD_MS`    | no       | `1800000`                 | How long an unpaid hold lasts. 30 minutes, or until the event starts, whichever is sooner.                  |
-| `AUTH_RATE_LIMIT`        | no       | `10`                      | Login and register requests allowed per client address per window.                                           |
-| `AUTH_RATE_TTL_MS`       | no       | `60000`                   | Length of that window.                                                                                       |
-| `BOOKING_RATE_LIMIT`     | no       | `30`                      | Reserve, pay, and cancel requests allowed per customer per window.                                           |
-| `BOOKING_RATE_TTL_MS`    | no       | `60000`                   | Length of that window.                                                                                       |
-| `MAX_ACTIVE_TICKETS_PER_EVENT` | no | `10`                   | Tickets one customer may hold or have paid for on a single event.                                            |
-| `RATE_LIMIT_STORE`       | no       | `memory`                  | `memory` counts inside this process. `redis` shares that counter across API instances.                        |
-| `REDIS_URL`              | if redis |                           | Required when `RATE_LIMIT_STORE` is `redis`. Example: `redis://localhost:6379`.                               |
-| `ADMIN_EMAIL`            | no       | `admin@mobiversite.local` | Seed only. Not read by the HTTP process.                                                                      |
-| `ADMIN_PASSWORD`         | no       | `change-me-admin`         | Seed only.                                                                                                    |
+| Variable                           | Required | Default                   | Meaning                                                                                                                                                                                                    |
+| ---------------------------------- | -------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV`                         | no       | `development`             | `development`, `test`, or `production`. Production rejects a short `JWT_SECRET`.                                                                                                                           |
+| `PORT`                             | no       | `3000`                    | HTTP port.                                                                                                                                                                                                 |
+| `DATABASE_URL`                     | yes      |                           | MySQL URL, for example `mysql://mobiversite:mobiversite@localhost:3306/mobiversite`.                                                                                                                       |
+| `JWT_SECRET`                       | yes      |                           | HMAC secret for access tokens.                                                                                                                                                                             |
+| `JWT_EXPIRES_IN_SECONDS`           | no       | `86400`                   | Access token lifetime. One day. Logout does not revoke it.                                                                                                                                                 |
+| `REFRESH_TOKEN_EXPIRES_IN_SECONDS` | no       | `604800`                  | Refresh token lifetime. Seven days. Stored as a SHA-256 hash.                                                                                                                                              |
+| `PAYMENT_SERVICE_URL`              | yes      |                           | Origin of the payment service, for example `http://localhost:4000`. A URL that already ends in `/payments` is accepted. Charges go to `/payments`, refunds to `/refunds`, and lookups to `/payments/:key`. |
+| `PAYMENT_WEBHOOK_SECRET`           | no       | `dev-webhook-secret`      | HMAC secret for `POST /api/v1/webhooks/payments`. Production requires at least 32 characters.                                                                                                              |
+| `RESERVATION_HOLD_MS`              | no       | `1800000`                 | How long an unpaid hold lasts. 30 minutes, or until the event starts, whichever is sooner.                                                                                                                 |
+| `AUTH_RATE_LIMIT`                  | no       | `10`                      | Login and register requests allowed per client address per window.                                                                                                                                         |
+| `AUTH_RATE_TTL_MS`                 | no       | `60000`                   | Length of that window.                                                                                                                                                                                     |
+| `BOOKING_RATE_LIMIT`               | no       | `30`                      | Reserve, pay, and cancel requests allowed per customer per window.                                                                                                                                         |
+| `BOOKING_RATE_TTL_MS`              | no       | `60000`                   | Length of that window.                                                                                                                                                                                     |
+| `MAX_ACTIVE_TICKETS_PER_EVENT`     | no       | `10`                      | Tickets one customer may hold or have paid for on a single event.                                                                                                                                          |
+| `RATE_LIMIT_STORE`                 | no       | `memory`                  | `memory` counts inside this process. `redis` shares that counter across API instances.                                                                                                                     |
+| `REDIS_URL`                        | if redis |                           | Required when `RATE_LIMIT_STORE` is `redis`. Example: `redis://localhost:6379`.                                                                                                                            |
+| `ADMIN_EMAIL`                      | no       | `admin@mobiversite.local` | Seed only. Not read by the HTTP process.                                                                                                                                                                   |
+| `ADMIN_PASSWORD`                   | no       | `change-me-admin`         | Seed only.                                                                                                                                                                                                 |
 
 Unknown or missing required variables abort startup. The Zod schema is in `src/config/env.validation.ts`.
 
@@ -253,17 +258,17 @@ stateDiagram-v2
 
 If the refund call fails, the reservation stays `PAID` and an event delete does not hide the event. Repeating the request tries the refund again. The mock treats a repeated refund of the same booking as the same refund.
 
-1. Register a customer with `POST /auth/register`. The password must be 12 to 128 characters. The email is trimmed and stored in lowercase. A duplicate email returns 409, including a different capitalization of the same address. The response has no password hash. Login and register are limited to 10 requests per minute per client address. The 11th returns 429.
-2. `POST /auth/login` returns a bearer token. `GET /auth/me` returns the user for that token. A token whose user row has been deleted is rejected, because every authenticated request loads the user from MySQL.
-3. As the admin, `POST /events` creates an event. `startsAt` must be in the future. `ticketPrice` is a non-negative number with at most two decimal places, up to `99999999.99`. `totalTickets` is an integer from 1 to `2147483647`. `availableTickets` starts equal to `totalTickets`.
-4. As the customer, `GET /events` lists events that are still on sale and have not started yet, soonest first. Pass `from` and `to` (ISO-8601 instants, inclusive) to choose a different window, including events that already started. `q` matches a case-insensitive substring of the title. `GET /events/:id` returns one event that is still on sale.
-5. `POST /bookings` with `{ "eventId", "quantity" }` holds tickets. `quantity` is 1 to 10, and one customer can have at most 10 active tickets (`HELD` or `PAID`) on the same event. The hold stores the ticket price at that moment, so a later price change does not rewrite the booking. The response status is `HELD`. `expiresAt` is 30 minutes ahead, or the event start, whichever comes first. Reserve, pay, and cancel are limited to 30 requests per minute per customer.
+1. Register a customer with `POST /api/v1/auth/register`. The password must be 12 to 72 characters and at most 72 UTF-8 bytes, because bcrypt only uses the first 72 bytes. The email is at most 255 characters, trimmed, and stored in lowercase. A duplicate email returns 409 with code `EMAIL_TAKEN`, including a different capitalization of the same address. The response has no password hash. Login and register are limited to 10 requests per minute per client address. The 11th returns 429.
+2. `POST /api/v1/auth/login` returns an access token, a refresh token, and both lifetimes. `POST /api/v1/auth/refresh` rotates the refresh token. `POST /api/v1/auth/logout` revokes the refresh token and returns 204. The access token stays valid until it expires. `GET /api/v1/auth/me` returns the user for the access token. A token whose user row has been deleted is rejected, because every authenticated request loads the user from MySQL.
+3. As the admin, `POST /api/v1/events` creates an event. `startsAt` must be in the future. `PUT /api/v1/events/:id` may set a start that is already in the past, so an admin can edit a started event. `ticketPrice` is a non-negative number with at most two decimal places, up to `99999999.99`. `totalTickets` is an integer from 1 to `2147483647`. `availableTickets` starts equal to `totalTickets`.
+4. As the customer, `GET /api/v1/events` lists events that are still on sale and have not started yet, soonest first. Pass `from` and `to` (ISO-8601 instants, inclusive) to choose a different window, including events that already started. `q` of 3 or more characters is a full-text search on the title. A shorter `q` stays a case-insensitive substring. `GET /api/v1/events/:id` returns one event that is still on sale.
+5. `POST /api/v1/bookings` with `{ "eventId", "quantity" }` holds tickets. `quantity` is 1 to 10, and one customer can have at most 10 active tickets (`HELD` or `PAID`) on the same event. The hold stores the ticket price at that moment, so a later price change does not rewrite the booking. The response status is `HELD` and includes `totalAmount` (`ticketPrice` times `quantity`). `expiresAt` is 30 minutes ahead, or the event start, whichever comes first. Reserve, pay, and cancel are limited to 30 requests per minute per customer.
 6. Send the header `Idempotency-Key` on that POST when the client might retry. The same customer, the same key, and the same body return the original booking. The same key with a different `eventId` or `quantity` returns 409. Another customer may reuse the same key. The key is 1 to 255 characters from letters, digits, `.`, `_`, `:`, and `-`.
-7. `POST /bookings/:id/payment` calls the payment service. `{ "paid": true }` moves the booking to `PAID`. `{ "paid": false }`, or a declined HTTP status, leaves the hold in place and returns 409. Send `x-mock-payment: decline` to force that refusal. A later attempt uses a new idempotency key, so the customer can try again until the hold expires. Each attempt is stored. If the process dies after the provider accepts the charge, a job asks `GET /payments/:key` and either marks the booking paid or refunds it.
-8. `POST /bookings/:id/cancel` on a hold returns the tickets and sets `CANCELLED`. On a paid booking it refunds first, then sets `REFUNDED` and returns the tickets. A paid booking cannot be cancelled after `startsAt`.
-9. `GET /bookings` and `GET /bookings/:id` return only the caller's reservations, newest first. A hold whose `expiresAt` has passed is shown as `EXPIRED` even if the background job has not written that status yet.
-10. An admin replaces an event with `PUT /events/:id` (every field is required) or hides it with `DELETE /events/:id`. Delete closes sales first, so a new hold cannot land while refunds are in progress. It then cancels unpaid holds, refunds paid bookings, and sets `deleted_at`. The row stays in the database. A hidden event disappears from the catalog and cannot be booked. Repeating the delete returns 404. `GET /events/:id/bookings` still lists the reservations after the event is hidden.
-11. `GET /events/:id/bookings` lists every reservation for that event and includes the customer email. Customers receive 403.
+7. `POST /api/v1/bookings/:id/payment` calls the payment service. `{ "paid": true }` moves the booking to `PAID` and sets `paidAt`. A declined charge leaves the hold in place and returns 409 with code `PAYMENT_DECLINED`. A provider 5xx returns 502 and leaves the attempt `PENDING`, so a charge that may have succeeded is not recorded as a decline. Send `x-mock-payment` with `decline`, `error`, `timeout`, `slow`, or `error-after-charge` outside production. Production ignores that header. A later attempt uses a new idempotency key, so the customer can try again until the hold expires. Each attempt is stored. If the process dies after the provider accepts the charge, a job asks `GET /payments/:key` and either marks the booking paid or refunds it. The provider can also `POST /api/v1/webhooks/payments` with an HMAC of the raw body in `x-payment-signature`.
+8. `POST /api/v1/bookings/:id/cancel` on a hold returns the tickets, sets `CANCELLED`, and sets `cancelledAt`. On a paid booking it refunds first, then sets `REFUNDED` and `refundedAt` and returns the tickets. A refund that the provider refuses returns 502 with code `REFUND_FAILED`. A paid booking cannot be cancelled after `startsAt`.
+9. `GET /api/v1/bookings` and `GET /api/v1/bookings/:id` return only the caller's reservations, newest first. A hold whose `expiresAt` has passed is shown as `EXPIRED` even if the background job has not written that status yet. Each response includes `paidAt`, `cancelledAt`, and `refundedAt` (`null` when that transition has not happened).
+10. An admin replaces an event with `PUT /api/v1/events/:id` (every field is required) or starts cancellation with `DELETE /api/v1/events/:id`. Delete returns 202 and `{ "id", "status": "CANCELLING" }`. Sales close immediately, so a new hold cannot land while refunds run. A background job cancels unpaid holds, refunds paid bookings, and then sets `deleted_at`. Repeating the delete while cancellation is in progress returns 202. After `deleted_at` is set, the next delete returns 404. A hidden event disappears from the catalog. `GET /api/v1/admin/events` lists every event, including ones the catalog hides, with `status` of `ON_SALE`, `PAST`, `CANCELLING`, or `DELETED`, plus held tickets, paid tickets, and paid revenue. `status` query values are `all`, `on_sale`, `upcoming`, `past`, `cancelling`, and `deleted`. `GET /api/v1/admin/events/:id` returns one of those rows.
+11. `GET /api/v1/events/:id/bookings` lists every reservation for that event and includes the customer email. Customers receive 403. Domain errors include a `code` field, for example `SOLD_OUT` or `EVENT_NOT_FOUND`. A 429 from the rate limiter does not.
 
 List responses look like `{ "items": [...], "nextCursor": "..." }`. Pass `nextCursor` back as the `cursor` query parameter. `limit` defaults to 20 and must be from 1 to 100. A bad cursor returns 400.
 
@@ -273,16 +278,22 @@ Role rules are enforced on the route, not only in the UI. A customer who calls a
 
 `mock-payment/server.mjs` is a small Node process with no dependencies. It is an ES module, so `node mock-payment/server.mjs` works from this repository.
 
-| Request                                                                        | Behavior                                                                             |
-| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
-| `GET /health`                                                                  | `{ "status": "ok" }`                                                                 |
-| `GET /payments/:idempotencyKey`                                                | The stored result, or 404 when that key was never charged                            |
-| `POST /payments`                                                               | `{ "paid": true }` with status 200                                                   |
-| `POST /payments` plus header `x-mock-payment: decline`                         | `{ "paid": false }` with status 402. The same key repeats that decline. A new key is a new attempt. |
-| `POST /payments` again with the same `Idempotency-Key`                         | The first result, with the original status, and no second charge                     |
-| `POST /refunds` with `{ "bookingId", "amount" }`                               | `{ "refunded": true }`. A later payment for that booking is treated as a new charge. |
+| Request                                                    | Behavior                                                                                                      |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `GET /health`                                              | `{ "status": "ok" }`                                                                                          |
+| `GET /payments/:idempotencyKey`                            | The stored result. A declined charge is HTTP 200 and `{ "paid": false }`. 404 means the key was never stored. |
+| `POST /payments`                                           | `{ "paid": true }` with status 200                                                                            |
+| `POST /payments` plus `x-mock-payment: decline`            | `{ "paid": false }` with status 402. The result is stored.                                                    |
+| `POST /payments` plus `x-mock-payment: error`              | Status 500. Nothing is stored.                                                                                |
+| `POST /payments` plus `x-mock-payment: error-after-charge` | Stores `{ "paid": true }`, then returns 500. Reconciliation can recover the charge.                           |
+| `POST /payments` plus `x-mock-payment: timeout`            | Stores the payment immediately, then answers after 8 seconds.                                                 |
+| `POST /payments` plus `x-mock-payment: slow`               | Waits 2 seconds, then returns 200.                                                                            |
+| `POST /payments` again with the same `Idempotency-Key`     | The first result, with the original status, and no second webhook                                             |
+| `POST /refunds` with `{ "bookingId", "amount" }`           | `{ "refunded": true }`. A later payment for that booking is treated as a new charge.                          |
 
-The API sends `Idempotency-Key` itself. The first attempt uses the booking id. A retry after a decline uses a new key. You do not set that header on the payment route. Send `x-mock-payment: decline` on `POST /bookings/:id/payment` when you want the mock to refuse.
+The API sends `Idempotency-Key` itself. The first attempt uses the booking id. A retry after a decline uses a new key. You do not set that header on the payment route. Send `x-mock-payment` on `POST /api/v1/bookings/:id/payment` when you want one of the modes above. The API ignores that header when `NODE_ENV` is `production`.
+
+When `PAYMENT_WEBHOOK_URL` and `PAYMENT_WEBHOOK_SECRET` are set, the mock posts `{ "idempotencyKey", "paid" }` to that URL after a stored charge. The header `x-payment-signature` is the hex HMAC-SHA256 of the raw body. A replay of the same idempotency key does not notify again. Compose points the webhook at `http://api:3000/api/v1/webhooks/payments`.
 
 ## Architecture
 
@@ -290,22 +301,26 @@ The code is grouped by feature. Each feature is a Nest module with a controller,
 
 ```
 src/
-  auth/         registration, login, JWT, roles
+  auth/         registration, login, refresh, logout, JWT, roles
   rate-limit/   memory or Redis counters for login and bookings
-  events/       catalog reads and admin writes
-  bookings/     holds, payment, cancellation, expiry cron
+  events/       catalog, admin list, cancellation
+  bookings/     facade over reserve, query, and expiry
   inventory/    row lock and return of expired holds
-  payment/      PaymentGateway port and the HTTP adapter
-  common/       cursor pagination, Prisma error filter, request log
+  payment/      gateway, charge, and refund
+  webhooks/     signed payment callbacks
+  scheduler/    expiry, reconciliation, and cancellation jobs
+  common/       cursor pagination, error codes, request id
   config/       environment schema, validation pipe, OpenAPI, helmet
-  health/       database and rate-limit checks
+  health/       liveness, readiness, and the combined health check
   prisma/       shared Prisma client
 prisma/         schema, migrations, seed
 mock-payment/   payment double used by Compose
 database/       SQL dump for reviewers
+requests/       REST Client examples
+scripts/load/   optional k6 script
 ```
 
-`EventsModule` calls `BookingsService` when an event is deleted, and both call `InventoryService` for locks. `BookingsService` does not depend on the events module. The payment HTTP client is behind the `PAYMENT_GATEWAY` injection token, so tests replace the whole gateway without starting a server.
+`EventsModule` asks `EventCancellationService` to close sales and finish refunds. It does not import the bookings module. `BookingsService` is a thin facade over reservation, query, charge, and expiry so existing callers stay in one place. The payment HTTP client is behind the `PAYMENT_GATEWAY` injection token, so tests replace the whole gateway without starting a server.
 
 ### Inventory and overselling
 
@@ -326,13 +341,13 @@ Unpaid holds die in two ways, and both return the tickets once.
 - A cron job runs every minute. It asks MySQL for a named lock (`GET_LOCK`) on its own connection and holds that lock until the sweep finishes, so two containers do not scan the same batch. The lock is connection-scoped, so it is taken on a dedicated connection rather than on a pooled Prisma connection that might be returned to the pool mid-sweep. If the lock is busy, that run does nothing. The next minute tries again.
 - Any reserve, cancel, pay, or event update for an event also releases that event's expired holds inside its own transaction. A customer does not wait for the cron to buy a ticket whose previous hold has already lapsed.
 
-The sweep is batched (200 events) and each event is committed on its own, so one failure does not roll back the others. Reads treat a `HELD` row past `expiresAt` as `EXPIRED` without writing, which keeps `GET /bookings` honest if the cron is late. The inventory count stays low until a write path or the cron actually returns the tickets. That split is deliberate: a read should not take a row lock.
+The sweep is batched (200 events) and each event is committed on its own, so one failure does not roll back the others. Reads treat a `HELD` row past `expiresAt` as `EXPIRED` without writing, which keeps `GET /api/v1/bookings` honest if the cron is late. The inventory count stays low until a write path or the cron actually returns the tickets. That split is deliberate: a read should not take a row lock. Expiry, payment reconciliation, and event cancellation are separate cron methods. One throwing does not skip the others.
 
 ### Payment outside the transaction
 
 The payment HTTP call happens after the hold is known to be valid and before the status update commits. The event row is not locked while the mock is on the network. Locking it for the whole round trip would stall every other buyer of that event.
 
-Before that call the API writes a `payment_attempts` row. The provider key is the booking id for the first attempt and `bookingId:2`, `bookingId:3`, and so on after a decline. If the process dies after the provider accepts the charge, the row stays `PENDING`. Once a minute the API asks `GET /payments/:key`. A stored payment is applied, or refunded when the hold can no longer be paid. An unknown key is marked declined so the customer can try again. A second pay request for the same booking waits if an attempt is still in flight.
+Before that call the API writes a `payment_attempts` row. The provider key is the booking id for the first attempt and `bookingId:2`, `bookingId:3`, and so on after a decline. If the process dies after the provider accepts the charge, the row stays `PENDING`. A provider 5xx does the same: the attempt is not marked declined, because the charge may have landed. Once a minute the API asks `GET /payments/:key`. A stored payment is applied, or refunded when the hold can no longer be paid. An unknown key is marked declined so the customer can try again. A second pay request for the same booking waits if an attempt is still in flight. A webhook with the same idempotency key applies the same result. If the booking is already `PAID`, the later writer does not refund.
 
 That leaves a smaller gap. The mock can say paid, and then the hold can expire or be cancelled before the status update. The API then calls `/refunds` and leaves the attempt `REFUND_DUE` if that call fails, so the next pass retries it. If another request already committed `PAID`, the loser does not refund. The winner keeps the ticket and the single charge.
 
@@ -340,13 +355,15 @@ That leaves a smaller gap. The mock can say paid, and then the hold can expire o
 
 `bookings.ticket_price` is copied from the event at reserve time. The amount sent to the payment service is that snapshot times `quantity`. Editing the event price later changes what a new hold will pay, not what an existing hold will pay.
 
-Deleting an event sets `deleted_at` instead of removing the row. Reservations still point at a real event, and the catalog query is `deleted_at IS NULL` ordered by `starts_at, id`. The index `(deleted_at, starts_at, id)` matches that query. Paid reservations are refunded before the event is hidden. If a new paid booking appears in the gap, delete returns 409 and the admin retries.
+Deleting an event sets `sales_closed_at` and returns 202. Refunds then run in the background. `deleted_at` is set only after no `HELD` or `PAID` booking remains. The catalog requires both timestamps to be null. `sales_closed_at` without `deleted_at` means `CANCELLING`. The catalog index is `(deleted_at, sales_closed_at, starts_at, id)`. A title search of 3 or more characters uses the full-text index `events_title_idx`. Shorter queries stay a substring match, because MySQL full-text ignores very short tokens. If a refund fails, `deleted_at` stays null and the next minute tries again.
 
 ### Authentication
 
 Access tokens carry the user id, email, and role, and they expire. The JWT strategy still loads the user on each request so a deleted account stops working immediately and a role change is visible without waiting for the token to expire.
 
-Login always runs a bcrypt compare. When the email does not exist, it compares against a dummy hash so the response time does not reveal which emails are registered. The error message is the same for a wrong password and an unknown email.
+Login also returns an opaque refresh token. Only its SHA-256 hash is stored. Refresh revokes the presented token with a conditional update and issues a new pair. A revoked or expired refresh token returns 401. Logout revokes the refresh token and always returns 204. The access token is unchanged until it expires.
+
+Login always runs a bcrypt compare. When the email does not exist, it compares against a dummy hash so the response time does not reveal which emails are registered. The error message is the same for a wrong password and an unknown email. Passwords longer than 72 bytes are rejected before hashing, because bcrypt would silently ignore the extra bytes.
 
 Registration does not accept a `role` field. Extra properties are rejected (`forbidNonWhitelisted`).
 
@@ -361,18 +378,19 @@ Passwords are hashed with bcrypt at 12 rounds. The dummy hash used for unknown e
 - **Decimal money as strings.** Prices travel as `"25.00"` so JSON numbers do not round currency.
 - **Helmet and CORS.** Security headers are on. Content Security Policy is off so the Swagger UI can load. CORS allows browser clients during review.
 - **Prisma errors.** A unique-constraint failure becomes 409, a missing record 404, and a check-constraint or overflow failure 400. Other database failures become a generic 500 without the SQL text.
-- **Request log.** Method, path, status, and duration, written when the response finishes, so a 404 is not logged as 200. Bodies are not logged, so passwords stay out of the log.
-- **Health.** `GET /health` is public and checks the database. When the rate-limit store is Redis, it also pings Redis. Compose and orchestrators use it.
+- **Request log.** `pino-http` writes method, path, status, and duration when the response finishes. `x-request-id` is echoed when it is a single token of letters, digits, `.`, `_`, or `-` up to 200 characters. Otherwise the API generates a UUID. Authorization and cookie headers are redacted. Logs are silent when `NODE_ENV` is `test`.
+- **Health.** `GET /health` is public and checks the database plus the rate-limit store. `GET /health/live` only checks that the process is up. `GET /health/ready` checks the database and the rate-limit store. Compose can keep using `/health`.
+- **Booking history.** Each status change writes a `booking_events` row with `from_status`, `to_status`, and a reason such as `reserved`, `paid`, `cancelled`, `expired`, `refunded`, `event_cancelled`, or `event_refunded`. `EXPIRED` does not set `cancelled_at`.
 
 ## Database
 
-The Prisma schema is `prisma/schema.prisma`. The tables are `users`, `events`, `bookings`, and `payment_attempts`.
+The Prisma schema is `prisma/schema.prisma`. The tables are `users`, `events`, `bookings`, `booking_events`, `payment_attempts`, and `refresh_tokens`.
 
 `users` has `email` (unique), `password_hash`, and `role` (`CUSTOMER` or `ADMIN`).
 
 `events` has the public fields (`title`, `description`, `venue`, `starts_at`, `ticket_price`, `total_tickets`, `available_tickets`) plus `deleted_at` and `sales_closed_at`. Sales close before refunds run, so a delete cannot race a new hold. The catalog index is `(deleted_at, sales_closed_at, starts_at, id)`.
 
-`bookings` has `user_id`, `event_id`, `quantity`, `status` (`HELD`, `PAID`, `CANCELLED`, `EXPIRED`, `REFUNDED`), a price snapshot, `expires_at`, and an optional idempotency key with a hash of the request body. The unique key is `(user_id, idempotency_key)`. MySQL allows many rows with a null key, so bookings that omit the header do not collide. The hot indexes are `(event_id, status, expires_at)` for expiry and `(event_id, created_at, id)` for the admin list.
+`bookings` has `user_id`, `event_id`, `quantity`, `status` (`HELD`, `PAID`, `CANCELLED`, `EXPIRED`, `REFUNDED`), a price snapshot, `expires_at`, `paid_at`, `cancelled_at`, `refunded_at`, and an optional idempotency key with a hash of the request body. The unique key is `(user_id, idempotency_key)`. MySQL allows many rows with a null key, so bookings that omit the header do not collide. The hot indexes are `(event_id, status, expires_at)` for expiry and `(event_id, created_at, id)` for the admin list. `booking_events` is the append-only history of those status changes. `refresh_tokens` stores the hash of an opaque refresh token.
 
 `payment_attempts` records each charge: the provider idempotency key, the amount, and a state (`PENDING`, `DECLINED`, `APPLIED`, `REFUND_DUE`, `REFUNDED`). A declined attempt does not block the next one.
 
@@ -390,7 +408,7 @@ npx prisma migrate dev
 
 ### SQL dump
 
-`database/mobiversite.sql` is a snapshot of the schema, the Prisma migration history, the seeded admin, and the sample event. The running app does not load this file. It applies `prisma/migrations` on startup. Import the dump when you want the schema without running the API. Importing it and then running migrations is safe: the `_prisma_migrations` rows match the files in the repository, so `migrate deploy` does nothing.
+`database/mobiversite.sql` is a snapshot of the schema, the Prisma migration history, the seeded admin, and the sample event. The running app does not load this file. The Compose `migrate` service applies `prisma/migrations`. Import the dump when you want the schema without running the API. Importing it and then running migrations is safe: the `_prisma_migrations` rows match the files in the repository, so `migrate deploy` does nothing.
 
 Create the database first if it does not exist, then import.
 
@@ -459,16 +477,18 @@ Useful single scripts: `npm test`, `npm run test:watch`, `npm run test:cov`, `np
 
 ## Scripts
 
-| Script                      | What it does                                            |
-| --------------------------- | ------------------------------------------------------- |
-| `npm run start:dev`         | Generate the client and start Nest in watch mode.       |
-| `npm run start:prod`        | Run `node dist/main` after `npm run build`.             |
-| `npm run build`             | Generate the client and compile to `dist`.              |
-| `npm run db:seed`           | Upsert the admin and the sample event. Requires `dist`. |
-| `npm run ci`                | The same checks CI runs before the end-to-end suite.    |
-| `npx prisma migrate deploy` | Apply pending migrations.                               |
-| `npx prisma studio`         | Optional table browser against `DATABASE_URL`.          |
-| `npm run prepare`           | Point Git at the Husky hooks. `npm ci` already does this. |
+| Script                               | What it does                                                                |
+| ------------------------------------ | --------------------------------------------------------------------------- |
+| `npm run start:dev`                  | Generate the client and start Nest in watch mode.                           |
+| `npm run start:prod`                 | Run `node dist/main` after `npm run build`.                                 |
+| `npm run build`                      | Generate the client and compile to `dist`.                                  |
+| `npm run db:seed`                    | Upsert the admin and the sample event. Requires `dist`.                     |
+| `npm run ci`                         | The same checks CI runs before the end-to-end suite.                        |
+| `npx prisma migrate deploy`          | Apply pending migrations.                                                   |
+| `npx prisma studio`                  | Optional table browser against `DATABASE_URL`.                              |
+| `npm run prepare`                    | Point Git at the Husky hooks. `npm ci` already does this.                   |
+| `k6 run scripts/load/reservation.js` | Optional load script. Raise `AUTH_RATE_LIMIT` first. Not part of CI.        |
+| `requests/reservation.http`          | REST Client requests for register, login, reserve, pay, and the admin list. |
 
 ## Release
 
@@ -485,26 +505,26 @@ Windows PowerShell and Command Prompt use the same two commands.
 
 The workflow is `.github/workflows/release.yml`. It logs in with the workflow's `GITHUB_TOKEN` and pushes three tags. `OWNER/REPO` is the GitHub repository name, lowercased:
 
-| Image                      | When                              |
-| -------------------------- | --------------------------------- |
-| `ghcr.io/OWNER/REPO:0.0.1` | The tag, without the leading `v`. |
-| `ghcr.io/OWNER/REPO:0.0`   | The major.minor line.             |
-| `ghcr.io/OWNER/REPO:latest` | Each successful release.         |
+| Image                       | When                              |
+| --------------------------- | --------------------------------- |
+| `ghcr.io/OWNER/REPO:0.0.1`  | The tag, without the leading `v`. |
+| `ghcr.io/OWNER/REPO:0.0`    | The major.minor line.             |
+| `ghcr.io/OWNER/REPO:latest` | Each successful release.          |
 
 The package is private until its visibility is changed under the repository's Packages page. Pulling a private package needs `docker login ghcr.io` with a GitHub token that can read packages.
 
 ## Troubleshooting
 
-| Symptom                                                | What to check                                                                                                                                                                 |
-| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `docker compose up` fails on the build                 | Docker is running, and the first build has network access to the npm registry.                                                                                                |
-| API container restarts                                 | `docker compose logs api`. A production `JWT_SECRET` shorter than 32 characters, or a MySQL that is not ready, is the usual cause. Migrations run before the process listens. |
-| `ECONNREFUSED 127.0.0.1:3306` from `npm run start:dev` | MySQL is not published on the host. Start it with `docker compose up mysql`.                                                                                                  |
-| `P1001` or migrate cannot connect                      | `DATABASE_URL` host is `localhost` on the host and `mysql` inside Compose. The example file and `compose.yml` already differ in that way.                                     |
-| Port already allocated                                 | Another process owns 3000, 3306, 4000, or 6379.                                                                                                                               |
-| Login returns 500 and the log mentions Redis          | `RATE_LIMIT_STORE` is `redis` and `REDIS_URL` is wrong, or Redis is down. Compose sets both. A local process can stay on `memory`. Health then returns 503. |
-| Register returns 429                                   | The auth limit is 10 requests per minute. Wait, or raise `AUTH_RATE_LIMIT`.                                                                                                   |
-| Payment returns 502                                    | The mock is down, or `PAYMENT_SERVICE_URL` is wrong. From the host it must be `localhost`, not the Compose hostname `payment`.                                                |
-| Seed says `Build the project before seeding`           | Run `npm run build` first.                                                                                                                                                    |
-| Admin login fails after a volume reset                 | The seed runs on API startup. If you imported the SQL dump instead, the password is still `change-me-admin`.                                                                  |
-| Windows `curl` posts the wrong body                    | You hit PowerShell's `curl` alias. Use `curl.exe`.                                                                                                                            |
+| Symptom                                                | What to check                                                                                                                                                                                                                   |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `docker compose up` fails on the build                 | Docker is running, and the first build has network access to the npm registry.                                                                                                                                                  |
+| API container restarts                                 | `docker compose logs api` and `docker compose logs migrate`. A production `JWT_SECRET` or `PAYMENT_WEBHOOK_SECRET` shorter than 32 characters is a usual cause. Migrations run in the `migrate` service before the API listens. |
+| `ECONNREFUSED 127.0.0.1:3306` from `npm run start:dev` | MySQL is not published on the host. Start it with `docker compose up mysql`.                                                                                                                                                    |
+| `P1001` or migrate cannot connect                      | `DATABASE_URL` host is `localhost` on the host and `mysql` inside Compose. The example file and `compose.yml` already differ in that way.                                                                                       |
+| Port already allocated                                 | Another process owns 3000, 3306, 4000, or 6379.                                                                                                                                                                                 |
+| Login returns 500 and the log mentions Redis           | `RATE_LIMIT_STORE` is `redis` and `REDIS_URL` is wrong, or Redis is down. Compose sets both. A local process can stay on `memory`. Health then returns 503.                                                                     |
+| Register returns 429                                   | The auth limit is 10 requests per minute. Wait, or raise `AUTH_RATE_LIMIT`.                                                                                                                                                     |
+| Payment returns 502                                    | The mock is down, or `PAYMENT_SERVICE_URL` is wrong. From the host it must be `localhost`, not the Compose hostname `payment`.                                                                                                  |
+| Seed says `Build the project before seeding`           | Run `npm run build` first.                                                                                                                                                                                                      |
+| Admin login fails after a volume reset                 | The seed runs on API startup. If you imported the SQL dump instead, the password is still `change-me-admin`.                                                                                                                    |
+| Windows `curl` posts the wrong body                    | You hit PowerShell's `curl` alias. Use `curl.exe`.                                                                                                                                                                              |

@@ -1,6 +1,20 @@
 services:
+  migrate:
+    build: .
+    image: mobiversite-reservation-system:local
+    entrypoint: ['sh', '-c', 'npx prisma migrate deploy && node prisma/seed.mjs']
+    environment:
+      DATABASE_URL: mysql://mobiversite:mobiversite@mysql:3306/mobiversite
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@mobiversite.local}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change-me-admin}
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: 'no'
+
   api:
     build: .
+    image: mobiversite-reservation-system:local
     ports:
       - '3000:3000'
     environment:
@@ -12,14 +26,15 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change-me-admin}
       JWT_EXPIRES_IN_SECONDS: ${JWT_EXPIRES_IN_SECONDS:-86400}
       PAYMENT_SERVICE_URL: http://payment:4000
+      PAYMENT_WEBHOOK_SECRET: "${PAYMENT_WEBHOOK_SECRET:-dev-only-webhook-secret-change-me!!}"
       RESERVATION_HOLD_MS: ${RESERVATION_HOLD_MS:-1800000}
       AUTH_RATE_LIMIT: ${AUTH_RATE_LIMIT:-10}
       AUTH_RATE_TTL_MS: ${AUTH_RATE_TTL_MS:-60000}
       RATE_LIMIT_STORE: redis
       REDIS_URL: redis://redis:6379
     depends_on:
-      mysql:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       payment:
         condition: service_healthy
       redis:
@@ -41,6 +56,9 @@ services:
     image: node:26-alpine
     working_dir: /app
     command: ['node', 'server.mjs']
+    environment:
+      PAYMENT_WEBHOOK_URL: http://api:3000/api/v1/webhooks/payments
+      PAYMENT_WEBHOOK_SECRET: "${PAYMENT_WEBHOOK_SECRET:-dev-only-webhook-secret-change-me!!}"
     volumes:
       - ./mock-payment:/app:ro
     ports:

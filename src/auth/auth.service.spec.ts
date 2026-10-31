@@ -28,7 +28,13 @@ describe('AuthService', () => {
     const moduleRef = await Test.createTestingModule({
       providers: [
         AuthService,
-        { provide: PrismaService, useValue: { user: users } },
+        {
+          provide: PrismaService,
+          useValue: {
+            user: users,
+            refreshToken: { create: vi.fn().mockResolvedValue({}) },
+          },
+        },
         { provide: JwtService, useValue: jwt },
         {
           provide: ConfigService,

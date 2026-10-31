@@ -23,6 +23,8 @@ describe('environmentSchema', () => {
     expect(parsed.BOOKING_RATE_LIMIT).toBe(30);
     expect(parsed.BOOKING_RATE_TTL_MS).toBe(60_000);
     expect(parsed.MAX_ACTIVE_TICKETS_PER_EVENT).toBe(10);
+    expect(parsed.REFRESH_TOKEN_EXPIRES_IN_SECONDS).toBe(604_800);
+    expect(parsed.PAYMENT_WEBHOOK_SECRET).toBe('dev-webhook-secret');
     expect(parsed.RATE_LIMIT_STORE).toBe('memory');
     expect(parsed.REDIS_URL).toBeUndefined();
   });
