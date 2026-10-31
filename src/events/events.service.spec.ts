@@ -265,9 +265,8 @@ function lockedEventTx(event: ReturnType<typeof storedEvent>) {
       .fn()
       .mockImplementation(
         (query: TemplateStringsArray | { strings: string[] }) => {
-          const text = Array.isArray(query)
-            ? query.join(' ')
-            : query.strings.join(' ');
+          const text =
+            'strings' in query ? query.strings.join(' ') : query.join(' ');
           if (text.includes('FROM events')) {
             return [{ id: event.id }];
           }

@@ -352,6 +352,85 @@ describe('Auth (e2e)', () => {
 
     await request(app.getHttpServer()).get('/docs').expect(200);
   });
+
+  it('rejects registration and session calls that are not usable', async () => {
+    await request(app.getHttpServer()).get('/health/live').expect(200);
+    await request(app.getHttpServer()).get('/health/ready').expect(200);
+
+    const shortPassword = await request(app.getHttpServer())
+      .post('/api/v1/auth/register')
+      .send({ email: uniqueEmail(), password: 'short-pass' })
+      .expect(400);
+    expect(shortPassword.body.code).toBe('VALIDATION_ERROR');
+
+    const longPassword = await request(app.getHttpServer())
+      .post('/api/v1/auth/register')
+      .send({ email: uniqueEmail(), password: 'p'.repeat(73) })
+      .expect(400);
+    expect(longPassword.body.code).toBe('VALIDATION_ERROR');
+
+    const widePassword = await request(app.getHttpServer())
+      .post('/api/v1/auth/register')
+      .send({ email: uniqueEmail(), password: 'é'.repeat(40) })
+      .expect(400);
+    expect(widePassword.body.code).toBe('VALIDATION_ERROR');
+
+    await request(app.getHttpServer())
+      .post('/api/v1/auth/register')
+      .send({ email: 'not-an-email', password })
+      .expect(400);
+    await request(app.getHttpServer())
+      .post('/api/v1/auth/login')
+      .send({ email: 'not-an-email', password })
+      .expect(400);
+    await request(app.getHttpServer())
+      .post('/api/v1/auth/login')
+      .send({})
+      .expect(400);
+
+    await request(app.getHttpServer()).get('/api/v1/auth/me').expect(401);
+    await request(app.getHttpServer())
+      .get('/api/v1/auth/me')
+      .set({ Authorization: 'Bearer not-a-jwt' })
+      .expect(401);
+
+    await request(app.getHttpServer())
+      .post('/api/v1/auth/refresh')
+      .send({ refreshToken: 'too-short' })
+      .expect(400);
+    const unknownRefresh = await request(app.getHttpServer())
+      .post('/api/v1/auth/refresh')
+      .send({ refreshToken: 'x'.repeat(32) })
+      .expect(401);
+    expect(unknownRefresh.body.code).toBe('INVALID_REFRESH_TOKEN');
+
+    await request(app.getHttpServer())
+      .post('/api/v1/auth/logout')
+      .send({ refreshToken: 'x'.repeat(32) })
+      .expect(204);
+  });
+
+  it('accepts a password at the bcrypt length limit and trims the login email', async () => {
+    const email = uniqueEmail();
+    const limit = 'p'.repeat(72);
+    await request(app.getHttpServer())
+      .post('/api/v1/auth/register')
+      .send({ email, password: limit })
+      .expect(201);
+
+    const login = await request(app.getHttpServer())
+      .post('/api/v1/auth/login')
+      .send({ email: `  ${email.toUpperCase()}  `, password: limit })
+      .expect(200);
+    expect(login.body.user.email).toBe(email);
+
+    const me = await request(app.getHttpServer())
+      .get('/api/v1/auth/me')
+      .set({ Authorization: `Bearer ${login.body.accessToken}` })
+      .expect(200);
+    expect(me.body).toMatchObject({ email, role: 'CUSTOMER' });
+    expect(me.body).not.toHaveProperty('passwordHash');
+  });
 });
 
 function uniqueEmail() {

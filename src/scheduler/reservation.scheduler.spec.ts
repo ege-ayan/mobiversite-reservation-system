@@ -1,5 +1,6 @@
 import { ConfigService } from '@nestjs/config';
 import { BookingsService } from '../bookings/bookings.service.js';
+import type { EnvironmentVariables } from '../config/env.validation.js';
 import { EventCancellationService } from '../events/event-cancellation.service.js';
 import { ReservationScheduler } from './reservation.scheduler.js';
 
@@ -14,7 +15,7 @@ describe('ReservationScheduler', () => {
   const scheduler = new ReservationScheduler(
     bookings as unknown as BookingsService,
     cancellation as unknown as EventCancellationService,
-    { get: () => true } as unknown as ConfigService,
+    { get: () => true } as unknown as ConfigService<EnvironmentVariables, true>,
   );
 
   beforeEach(() => {
@@ -47,7 +48,10 @@ describe('ReservationScheduler', () => {
     const paused = new ReservationScheduler(
       bookings as unknown as BookingsService,
       cancellation as unknown as EventCancellationService,
-      { get: () => false } as unknown as ConfigService,
+      { get: () => false } as unknown as ConfigService<
+        EnvironmentVariables,
+        true
+      >,
     );
 
     await paused.releaseExpiredHolds();

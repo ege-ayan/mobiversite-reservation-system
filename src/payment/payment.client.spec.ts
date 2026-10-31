@@ -2,6 +2,7 @@ import { BadGatewayException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import type { EnvironmentVariables } from '../config/env.validation.js';
 import { PaymentClient } from './payment.client.js';
 
 describe('PaymentClient', () => {
@@ -65,9 +66,7 @@ describe('PaymentClient', () => {
 
   it('accepts a configured URL that already ends in /payments', async () => {
     const { port } = server.address() as AddressInfo;
-    client = new PaymentClient({
-      get: () => `http://127.0.0.1:${port}/payments`,
-    } as ConfigService);
+    client = new PaymentClient(config(`http://127.0.0.1:${port}/payments`));
 
     await expect(
       client.confirm({
@@ -139,9 +138,7 @@ describe('PaymentClient', () => {
   });
 
   it('fails when the payment service cannot be reached', async () => {
-    client = new PaymentClient({
-      get: () => 'http://127.0.0.1:1',
-    } as ConfigService);
+    client = new PaymentClient(config('http://127.0.0.1:1'));
 
     await expect(
       client.confirm({
@@ -155,9 +152,13 @@ describe('PaymentClient', () => {
 
 function clientFor(server: Server) {
   const { port } = server.address() as AddressInfo;
-  return new PaymentClient({
-    get: () => `http://127.0.0.1:${port}`,
-  } as ConfigService);
+  return new PaymentClient(config(`http://127.0.0.1:${port}`));
+}
+
+function config(url: string) {
+  return {
+    get: () => url,
+  } as unknown as ConfigService<EnvironmentVariables, true>;
 }
 
 function replaceHandler(

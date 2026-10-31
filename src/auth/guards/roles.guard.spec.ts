@@ -13,7 +13,7 @@ describe('RolesGuard', () => {
       getHandler: () => 'handler',
       getClass: () => 'class',
       switchToHttp: () => ({ getRequest: () => ({ user }) }),
-    } as ExecutionContext;
+    } as unknown as ExecutionContext;
   }
 
   it('allows a route that does not require a role', () => {

@@ -8,7 +8,7 @@ describe('JwtAuthGuard', () => {
   const context = {
     getHandler: () => 'handler',
     getClass: () => 'class',
-  } as ExecutionContext;
+  } as unknown as ExecutionContext;
 
   it('skips authentication on a public route', () => {
     reflector.getAllAndOverride.mockReturnValue(true);

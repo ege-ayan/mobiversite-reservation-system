@@ -799,8 +799,8 @@ function heldBooking() {
 }
 
 function sqlText(query: TemplateStringsArray | { strings: string[] }) {
-  if (Array.isArray(query)) {
-    return query.join(' ');
+  if ('strings' in query) {
+    return query.strings.join(' ');
   }
-  return query.strings.join(' ');
+  return query.join(' ');
 }

@@ -1,4 +1,5 @@
 import { ConfigService } from '@nestjs/config';
+import type { EnvironmentVariables } from '../config/env.validation.js';
 import { PrismaService } from './prisma.service.js';
 
 describe('PrismaService', () => {
@@ -11,7 +12,7 @@ describe('PrismaService', () => {
       .mockResolvedValue();
     const service = new PrismaService({
       get: () => 'mysql://mobiversite:mobiversite@127.0.0.1:3306/mobiversite',
-    } as ConfigService);
+    } as unknown as ConfigService<EnvironmentVariables, true>);
 
     await service.onModuleInit();
     await service.onModuleDestroy();
